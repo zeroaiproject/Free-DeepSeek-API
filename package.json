@@ -1,0 +1,16 @@
+{
+  "name": "free-deepseek-api",
+  "version": "1.0.0",
+  "description": "Use 100% Illegal and 100% Free DeepSeek API.",
+  "main": "server.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test:pow": "node scripts/pow-selftest.js"
+  },
+  "keywords": ["deepseek", "openai", "proxy", "api", "free"],
+  "license": "WTFPL"
+}

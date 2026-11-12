@@ -1,0 +1,3 @@
+# One DeepSeek web userToken per line.
+# Get it from localStorage.getItem('userToken') on chat.deepseek.com
+# or with: node scripts/login.js <email> <password>
