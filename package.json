@@ -9,8 +9,16 @@
   },
   "scripts": {
     "start": "node server.js",
-    "test:pow": "node scripts/pow-selftest.js"
+    "test:pow": "node scripts/pow-selftest.js",
+    "bench": "node scripts/bench.js",
+    "selftest": "node scripts/pow-selftest.js && node scripts/order-test.js seq"
   },
-  "keywords": ["deepseek", "openai", "proxy", "api", "free"],
+  "keywords": [
+    "deepseek",
+    "openai",
+    "proxy",
+    "api",
+    "free"
+  ],
   "license": "WTFPL"
 }

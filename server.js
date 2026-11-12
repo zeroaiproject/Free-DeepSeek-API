@@ -6,7 +6,8 @@ const http = require('http');
 const crypto = require('crypto');
 
 const { TokenPool } = require('./lib/pool');
-const { createSession, complete, ApiError } = require('./lib/deepseek');
+const { complete, ApiError } = require('./lib/deepseek');
+const { Warmer } = require('./lib/warm');
 const { makeExtractor } = require('./lib/stream');
 const { init: initPow } = require('./lib/pow');
 
@@ -16,6 +17,7 @@ const API_KEY = process.env.API_KEY || '';
 const DEFAULT_MODEL = process.env.DEFAULT_MODEL || 'deepseek-chat';
 
 const pool = TokenPool.load();
+const warmer = new Warmer();
 
 const MODELS = [
   { id: 'deepseek-chat', object: 'model', created: 1700000000, owned_by: 'deepseek' },
@@ -150,13 +152,19 @@ async function handleChat(req, res) {
 
     const id = 'chatcmpl-' + crypto.randomUUID().replace(/-/g, '');
     const created = Math.floor(Date.now() / 1000);
+    const tAttempt = Date.now();
 
     try {
-      const sessionId = await createSession(token);
+      // Both usually resolve instantly from the pre-warm cache.
+      const tSession = Date.now();
+      const [sessionId, challenge] = await Promise.all([warmer.session(token), warmer.challenge(token)]);
+      const sessionMs = Date.now() - tSession;
 
       // ---- streaming path: relay deltas as they arrive -------------------
       if (stream && !res.headersSent) {
         const extractor = makeExtractor();
+        const timing = {};
+        const includeUsage = !!(body.stream_options && body.stream_options.include_usage);
         let started = false;
         let jsonBody = '';
 
@@ -164,12 +172,22 @@ async function handleChat(req, res) {
         const open = () => {
           if (started) return;
           started = true;
+          const challengeMs = timing.challengeMs || 0;
+          const solveMs = timing.powMs || 0;
+          // session and challenge run concurrently; only the slower one counts.
+          const prepMs = Math.max(sessionMs, challengeMs) + solveMs;
+          const upstreamTtfbMs = Math.max(0, Date.now() - tAttempt - prepMs);
           res.writeHead(200, {
             'Content-Type': 'text/event-stream; charset=utf-8',
             'Cache-Control': 'no-cache, no-transform',
             Connection: 'keep-alive',
             'Access-Control-Allow-Origin': '*',
             'X-Accel-Buffering': 'no',
+            'X-Ds-Session-Ms': String(sessionMs),
+            'X-Ds-Challenge-Ms': String(challengeMs),
+            'X-Ds-Solve-Ms': String(solveMs),
+            'X-Ds-Prep-Ms': String(prepMs),
+            'X-Ds-Upstream-Ttfb-Ms': String(upstreamTtfbMs),
           });
           write(chunk(id, model, { role: 'assistant', content: '' }));
         };
@@ -185,7 +203,7 @@ async function handleChat(req, res) {
         };
 
         const gate = createStreamGate(onStream, onJson);
-        const upstream = await complete(token, { sessionId, prompt, thinking, onData: gate });
+        const upstream = await complete(token, { sessionId, challenge, prompt, thinking, onData: gate, timing });
 
         if (started) {
           pool.reward(token);
@@ -193,6 +211,20 @@ async function handleChat(req, res) {
             write(chunk(id, model, ev.kind === 'reasoning' ? { reasoning_content: ev.delta } : { content: ev.delta }));
           }
           write(chunk(id, model, {}, 'stop'));
+          if (includeUsage) {
+            write({
+              id,
+              object: 'chat.completion.chunk',
+              created,
+              model,
+              choices: [],
+              usage: {
+                prompt_tokens: 0,
+                completion_tokens: extractor.usage || 0,
+                total_tokens: extractor.usage || 0,
+              },
+            });
+          }
           res.write('data: [DONE]\n\n');
           return res.end();
         }
@@ -210,7 +242,7 @@ async function handleChat(req, res) {
       }
 
       // ---- non-streaming path -------------------------------------------
-      const upstream = await complete(token, { sessionId, prompt, thinking });
+      const upstream = await complete(token, { sessionId, challenge, prompt, thinking });
 
       if (upstream.status !== 200) {
         lastError = new ApiError('HTTP_' + upstream.status, upstream.body.slice(0, 300), upstream.status);
@@ -261,7 +293,9 @@ async function handleChat(req, res) {
     } catch (e) {
       lastError = e;
       if (isAuthError(e)) pool.penalize(token, 300_000);
-      else pool.penalize(token, 5_000);
+      else if (e instanceof ApiError && (e.code === 40301 || /INVALID_POW/.test(String(e.msg)))) {
+        warmer.dropChallenges(token);
+      } else pool.penalize(token, 5_000);
     }
   }
 
@@ -292,6 +326,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, {
         status: 'ok',
         tokens: pool.status(),
+        warm: warmer.stats(),
         models: MODELS.map((m) => m.id),
       });
     }

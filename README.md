@@ -94,6 +94,8 @@ process manager or `export`).
 | `DEFAULT_MODEL` | `deepseek-chat` | Model when the request omits `model` |
 | `DEEPSEEK_TOKENS` | — | Comma/space separated tokens (merged with `tokens.txt`) |
 | `DEEPSEEK_TOKENS_FILE` | `./tokens.txt` | Extra token file |
+| `WARM_POOL` | `3` | Pre-fetched PoW challenges kept per token (`0` disables) |
+| `WARM_SESSION_USES` | `100` | Reuse a session this many times before rotating |
 
 Multiple tokens are load-balanced round-robin. A token that returns
 `INVALID_TOKEN` is benched with exponential backoff and the request is retried
@@ -206,6 +208,78 @@ becomes `content`.
 
 ---
 
+## Performance
+
+Measured on the reference machine (single token, `WARM_POOL=3`, wired network),
+against `chat.deepseek.com` over TLS:
+
+```bash
+node scripts/bench.js 5 short     # short answers
+node scripts/bench.js 3 long      # ~1200-token answers
+```
+
+| Metric | Cold cache | Warm cache |
+| --- | --- | --- |
+| **TTFT** (client → first content token) | 963 ms | **764 ms** |
+| Proxy prep before upstream request | 363 ms | **43 ms** |
+| Decode throughput (sustained) | — | **166 tok/s** |
+| Wall throughput (incl. TTFT) | — | **144 tok/s** |
+| End-to-end, 1 150-token answer | — | 8.0 s |
+
+Per-run, long profile:
+
+```
+#1  ttft 642 ms  total 9.07 s  tok 1293  decode 157.9 tok/s  wall 142.6 tok/s
+#2  ttft 859 ms  total 7.52 s  tok 1135  decode 170.9 tok/s  wall 150.9 tok/s
+#3  ttft 856 ms  total 8.02 s  tok 1152  decode 166.1 tok/s  wall 143.7 tok/s
+```
+
+### Where the TTFT goes (warm)
+
+```
+  43 ms  prep    solve the pre-fetched PoW (single-use, ~30-90 ms)
+ 320 ms  TTFB    upstream TLS + request accept
+ 400 ms  prefill DeepSeek starts emitting the first fragment
+─────
+ 764 ms
+```
+
+### The pre-warm cache
+
+`lib/warm.js` keeps, per token:
+
+- a queue of **unsolved challenges** (valid 300 s, consumed only by the
+  completion that uses them) — removes a 290 ms round-trip;
+- **one reusable session** — `parent_message_id: null` makes every completion a
+  new branch from the root, so no history leaks between requests (verified),
+  and the session is rotated every `WARM_SESSION_USES` calls.
+
+A solved `X-Ds-Pow-Response` is **single-use** — replaying it returns
+`40301 INVALID_POW_RESPONSE` — so the solve itself cannot be cached.
+
+Set `WARM_POOL=0` to disable and measure the cold path.
+
+### Instrumentation
+
+Streaming responses carry timing headers:
+
+| Header | Meaning |
+| --- | --- |
+| `X-Ds-Session-Ms` | time spent acquiring a session |
+| `X-Ds-Challenge-Ms` | time spent fetching the PoW challenge |
+| `X-Ds-Solve-Ms` | time spent solving the PoW |
+| `X-Ds-Prep-Ms` | `max(session, challenge) + solve` |
+| `X-Ds-Upstream-Ttfb-Ms` | proxy → first byte from DeepSeek |
+
+### Upstream rate limit
+
+DeepSeek silently returns an **empty answer** (no error) after ~5 requests fired
+back-to-back on one account; it recovers within ~30 s. The benchmark spaces
+requests with `BENCH_DELAY_MS` (default 3000) and retries an empty run once.
+Space your own traffic, or run more tokens in the pool.
+
+---
+
 ## Layout
 
 ```
@@ -217,7 +291,11 @@ lib/pool.js                   round-robin token pool with cooldown
 lib/sha3_wasm_bg.*.wasm       original PoW module
 scripts/login.js              email+password -> userToken
 scripts/pow-selftest.js       offline PoW vector test
+lib/warm.js                   pre-warm cache (challenges + reusable session)
+scripts/bench.js              TTFT / tokens-per-second benchmark
 scripts/raw.js                dump the raw upstream SSE stream
+scripts/order-test.js         session vs PoW ordering check
+scripts/reuse-test.js         PoW/session reuse semantics
 run.sh                        start/restart with a pidfile
 ```
 
