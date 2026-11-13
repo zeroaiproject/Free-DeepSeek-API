@@ -2,11 +2,20 @@
 
 [Aider](https://aider.chat) is a terminal pair-programming tool. It works well with **OpenAI-compatible** endpoints.
 
+> Verified against Aider docs: use `OPENAI_API_BASE` + `OPENAI_API_KEY` and prefix the model with `openai/` (e.g. `--model openai/deepseek-chat`). CLI flags/config names can vary slightly by version.
+
 ## Configuration
 
 ```bash
+# macOS/Linux
 export OPENAI_API_BASE=http://127.0.0.1:8787/v1
 export OPENAI_API_KEY=public   # or your API_KEY value
+```
+
+```powershell
+# Windows (PowerShell, new shells after setx)
+setx OPENAI_API_BASE http://127.0.0.1:8787/v1
+setx OPENAI_API_KEY public
 ```
 
 Run Aider targeting the proxy model:
@@ -19,7 +28,7 @@ aider --model openai/deepseek-chat
 aider --model openai/deepseek-reasoner
 ```
 
-> Depending on your Aider version, the prefix may be `openai/` with `OPENAI_API_BASE`, or you may need `--openai-api-base`. Check `aider --help`.
+> If your version prefers flags, try `--openai-api-base http://127.0.0.1:8787/v1 --openai-api-key public`. Check `aider --help` for your installed version.
 
 ## Examples
 

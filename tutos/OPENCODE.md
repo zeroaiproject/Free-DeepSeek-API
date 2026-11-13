@@ -9,7 +9,9 @@
 
 ## Configuration
 
-Add the provider in `~/.config/opencode/opencode.jsonc` (create if needed):
+OpenCode config locations and schema evolve by version (see [OpenCode config docs](https://opencode.ai/docs/config/)). Use `$schema: "https://opencode.ai/config.json"` for editor validation and adapt keys to your installed version.
+
+Add a provider in `~/.config/opencode/opencode.jsonc` (global) or `opencode.jsonc` (project):
 
 ```jsonc
 {
@@ -43,8 +45,10 @@ Add the provider in `~/.config/opencode/opencode.jsonc` (create if needed):
 }
 ```
 
-> `apiKey` must be non-empty for the OpenAI-compatible client; the proxy ignores it unless `API_KEY` is set server-side (then use the same value).
-> If your OpenCode version expects a different schema key (e.g. `providers`/`settings`/`compatibility`), adapt to your version's config format — the essentials are `baseURL`, `apiKey`, and model IDs `deepseek-chat` / `deepseek-reasoner`.
+**Notes**
+- `apiKey` must be non-empty for most OpenAI-compatible clients; the proxy ignores it unless `API_KEY` is set server-side (then use the same value).
+- If your version expects different provider keys/shape, keep the essentials: **OpenAI-compatible provider**, **`baseURL`** `http://127.0.0.1:8787/v1`, **non-empty API key**, and model IDs `deepseek-chat` / `deepseek-reasoner`.
+- You can set a default model with `"model": "freedeepseek/deepseek-chat"` if supported by your config. Check `opencode --help` and the schema for your version.
 
 ## Usage
 

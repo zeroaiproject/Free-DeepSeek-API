@@ -4,13 +4,17 @@
 
 ## Configuration
 
+Windsurf's BYOK/provider options vary by version and plan.
+
 1. Proxy running: `http://127.0.0.1:8787/v1` (valid token).
-2. Open Windsurf model/provider settings:
-   - **Provider type**: OpenAI / OpenAI-compatible (or "Bring your own key" if available)
+2. Open Windsurf model/provider settings and configure an OpenAI-compatible provider (if available):
+   - **Provider type**: OpenAI / OpenAI-compatible (or "Bring your own key")
    - **Base URL**: `http://127.0.0.1:8787/v1`
    - **API Key**: `public` (or your `API_KEY`)
    - **Model**: `deepseek-chat` or `deepseek-reasoner`
 3. (If requested) set context window: **1,000,000**.
+
+> Field names and availability differ by release. Keep the essentials the same: OpenAI-compatible endpoint, base URL, non-empty key, and model ID. Check Windsurf's current docs/settings for your version.
 
 ## Recommendations
 

@@ -4,7 +4,7 @@
 
 ## Configuration (`config.json` / `config.yaml`)
 
-Depending on your Continue version, add a model pointing to the proxy.
+Continue's config schema has evolved (JSON and newer YAML/forms). Add an OpenAI-compatible model pointing to the proxy and adapt field names to your installed version.
 
 ### Example (common JSON format)
 
@@ -33,9 +33,9 @@ In `~/.continue/config.json`:
 }
 ```
 
-### Example (recent YAML format)
+### Example (YAML / newer-style fields)
 
-In `~/.continue/config.yaml`:
+In `~/.continue/config.yaml` (or your version's equivalent):
 
 ```yaml
 models:
@@ -53,7 +53,7 @@ models:
     roles: [chat]
 ```
 
-> Adapt keys (`apiBase`/`apiKey`, `contextLength`, `roles`) to your Continue version's exact schema.
+> Keep the essentials correct for your schema: **provider `openai` (OpenAI-compatible)**, **`apiBase`/base URL** `http://127.0.0.1:8787/v1`, **`apiKey`** `public` (or your `API_KEY`), and **model** `deepseek-chat`/`deepseek-reasoner`. Refer to Continue's docs for the exact keys supported by your version.
 
 ## Usage
 

@@ -4,7 +4,7 @@
 
 ## Configuration
 
-Edit Zed settings (`~/.config/zed/settings.json` or via the settings UI) to add an OpenAI-compatible provider pointing to the proxy.
+Zed's AI/provider configuration changes across releases. Configure an **OpenAI-compatible** provider and adapt field names to your installed Zed version (Settings UI or `~/.config/zed/settings.json`).
 
 ### Example (indicative structure)
 
@@ -31,7 +31,7 @@ Edit Zed settings (`~/.config/zed/settings.json` or via the settings UI) to add 
 }
 ```
 
-> The exact key structure (`language_models`, `openai`, `api_url`, `available_models`, API key handling) may vary by Zed version. Refer to your version's settings and keep these values: **base URL** `http://127.0.0.1:8787/v1`, models `deepseek-chat` / `deepseek-reasoner`, key `public` (or your `API_KEY`).
+> The exact schema (keys for base URL, API key, available models, and provider selection) may differ by version. Keep the essentials: **OpenAI-compatible provider**, **base URL** `http://127.0.0.1:8787/v1`, **models** `deepseek-chat` / `deepseek-reasoner`, and **API key** `public` (or your `API_KEY`). Check Zed's current docs/settings for your version.
 
 ## Usage
 

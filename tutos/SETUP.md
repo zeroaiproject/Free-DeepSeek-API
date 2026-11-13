@@ -54,6 +54,8 @@ node server.js
 
 Default: `http://127.0.0.1:8787`
 
+**Available APIs:** OpenAI-compatible (`/v1/chat/completions`), Anthropic Messages (`/v1/messages`), Vertex/Gemini (`/v1beta/models/{model}:generateContent`, `:streamGenerateContent`).
+
 ## 3) Docker
 
 ```bash

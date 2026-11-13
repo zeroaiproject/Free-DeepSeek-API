@@ -5,14 +5,14 @@
 ## Configuration
 
 1. Install the **Cline** extension in VS Code.
-2. Open Cline settings → **API Provider**: `OpenAI Compatible`.
+2. Open Cline settings → **API Provider**: `OpenAI Compatible` (label may vary slightly by version).
 3. Set:
    - **Base URL**: `http://127.0.0.1:8787/v1`
    - **API Key**: `public` (or your `API_KEY`)
    - **Model ID**: `deepseek-chat` (or `deepseek-reasoner`)
-4. (Optional) Adjust:
-   - **Context window**: `1000000`
-   - **Max tokens**: `8192` (chat) / `32768` (reasoner)
+4. (Optional, if available in your version): set context window to `1000000`, max output tokens `8192` (chat) / `32768` (reasoner), and enable streaming/tools.
+
+> UI labels and available fields can change between Cline releases. If a field name differs, keep the same values: OpenAI-compatible base URL + model ID + non-empty API key. See the extension settings/help for your installed version.
 
 ## Usage
 

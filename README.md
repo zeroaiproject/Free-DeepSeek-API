@@ -105,56 +105,74 @@ The proxy requires a **`userToken`** (stored by the DeepSeek web app after login
 
 ## 🔬 How it works
 
-The proxy reproduces the `chat.deepseek.com` web flow and exposes it as OpenAI-, Anthropic-, and Vertex/Gemini-compatible APIs. At a high level: **bearer auth (`userToken`) → per-request PoW → chat session → SSE completion → format translation**.
+The proxy reproduces the `chat.deepseek.com` web flow and exposes it through **OpenAI**, **Anthropic Messages**, and **Vertex/Gemini** compatible interfaces.
+
+At a high level: **client request → format normalization → auth/token selection → per-request PoW → chat session → upstream SSE completion → stream assembly → format translation → client response**.
 
 ```text
-Client (SDK/agent)                     Local proxy                         DeepSeek web
-      │                                     │                                   │
-      │  POST /v1/chat/completions          │                                   │
-      ├────────────────────────────────────▶│  create_pow_challenge             │
-      │                                     ├──────────────────────────────────▶│
-      │                                     │◀───────── challenge ──────────────┤
-      │                                     │  solve PoW (WASM, ~30–110ms)      │
-      │                                     │  create/reuse chat_session        │
-      │                                     ├──────────────────────────────────▶│
-      │                                     │  POST /chat/completion (SSE)      │
-      │                                     ├──────────────────────────────────▶│
-      │  SSE chunks / OpenAI JSON           │◀──── fragments / patches ─────────┤
-      │◀────────────────────────────────────│  assemble + map (THINK/tools)     │
+Client / SDK / Agent
+   │  OpenAI  (/v1/chat/completions)
+   │  Anthropic (/v1/messages)
+   │  Vertex/Gemini (:generateContent / :streamGenerateContent)
+   ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                        Free DeepSeek API (local)                    │
+│  1) Validate + normalize request (messages/tools/stream/model)      │
+│  2) Pick token (pool) + rate-limit/lock + prewarm (challenge/sess) │
+│  3) Solve DeepSeekHashV1 PoW (WASM) -> X-Ds-Pow-Response           │
+│  4) Create/reuse chat session + POST /chat/completion (SSE)        │
+│  5) Reassemble fragments/patches + emulate tools (JSON/DSML)       │
+│  6) Translate to target API format (stream or non-stream)          │
+└───────────────────────────────┬─────────────────────────────────────┘
+                                │ HTTPS (PoW + Bearer userToken)
+                                ▼
+                        chat.deepseek.com (web backend)
 ```
 
-### 1) Proof-of-Work (anti-abuse)
-Each completion requires an `X-Ds-Pow-Response` header:
-1. **Challenge** — `POST /api/v0/chat/create_pow_challenge` with `target_path` → `algorithm, challenge, salt, signature, difficulty, expire_at, target_path`.
-2. **Solve** — find `answer ∈ [0, difficulty]` such that `DeepSeekHash(salt_expireAt_answer) == challenge`.
-   - Custom Keccak algorithm embedded in `lib/sha3_wasm_bg.7b9ca65ddd.wasm` (executed as-is, **not** standard SHA-256/SHA3).
-3. **Proof** — Base64-encoded JSON: `{"algorithm","challenge","salt","answer","signature","target_path"}`.
+### 1) API compatibility & request normalization
+- **OpenAI**: native internal shape (`/v1/chat/completions`, `tools`, `tool_choice`, streaming chunks).
+- **Anthropic**: `/v1/messages` requests/responses/events are translated (system/messages/content blocks, `tool_use`/`tool_result`, `thinking`/reasoning mapping, stop reasons).
+- **Vertex/Gemini**: `contents`/`parts`, `systemInstruction`, function call/response, and `generateContent`/`streamGenerateContent` responses are translated.
+- Incoming messages are normalized into a flattened transcript for the web endpoint while preserving roles, tool calls, and tool results as text/context.
 
-> Unsolved challenges can be pre-warmed (TTL ~300 s); a solved proof is **single-use**.
+### 2) Authentication, token pool & pacing
+- Uses DeepSeek web **`userToken`** bearer credentials from `tokens.txt` / env (hot-reload, masked in `/health`).
+- **Pool & resilience**: round-robin selection, cooldown/penalties, optional auto re-login (if credentials configured), watchdog liveness probes.
+- **Pacing**: token bucket + minimum gap + jitter + escalating cooldown, with **one in-flight upstream completion per token** to reduce bursty patterns and absorb silent throttling.
+- **Failure modes**: distinguishes token revocation (recoverable by re-mint/re-login) from **account suspension** (`40003` across endpoints, not recoverable until expiry) and reports/backoffs accordingly.
 
-### 2) Sessions, context & prompt
-4. **Session** — `POST /api/v0/chat_session/create` returns a `chat_session.id` reused for a few requests then rotated (latency/noise trade-off).
-5. **Flattened transcript** — the proxy converts OpenAI messages (system/user/assistant/tool) into the text prompt expected by the web endpoint. It advertises up to a **1M token** window (`/v1/models`), but the effective limit depends on the upstream endpoint/account.
-6. **Completion** — `POST /api/v0/chat/completion` with `model: default|thinking`, prompt, and params; response is **SSE**.
+### 3) Proof-of-Work (per completion)
+Each completion must include a valid `X-Ds-Pow-Response`:
+1. **Challenge** — `POST /api/v0/chat/create_pow_challenge` (`target_path`) returns algorithm/challenge/salt/signature/difficulty/expiry metadata.
+2. **Solve** — find `answer` in the allowed range such that `DeepSeekHashV1(salt_expireAt_answer) == challenge`.
+   - Uses the shipped custom Keccak/WASM implementation (`lib/sha3_wasm_bg.7b9ca65ddd.wasm`) for correctness and speed (~30–110 ms typical).
+3. **Proof header** — Base64 JSON payload `{ algorithm, challenge, salt, answer, signature, target_path }`.
 
-### 3) SSE → OpenAI translation
-The DeepSeek stream (snapshots `response.fragments`, appends `{"v":"..."}`, targeted replacements/patches, status events) is reassembled and mapped:
-- `THINK` fragments → `reasoning_content` (`deepseek-reasoner`)
-- text fragments → `delta.content` / `message.content`
-- end of stream → `finish_reason` (`stop` / `tool_calls`), relayed aggregate `usage`
+Pre-warming may cache unsolved challenges/sessions; **solved PoW proofs are single-use**, while unsolved challenges are reusable within their validity window.
 
-### 4) Tool calling (emulation)
-The web endpoint has no native function calling; the proxy emulates it:
-- **Injects** `tools` schemas into a system instruction block (names, JSON Schema, rules, `tool_choice`/`parallel_tool_calls`).
-- **Parses** replies into OpenAI `tool_calls` from JSON (`{"tool_calls":[...]}`) **or** native **DSML** markup (`<｜DSML｜ invoke/parameter>`), with argument normalization/coercion.
-- **Stream-safe**: `streamgate` holds back a short tail (`STREAM_HOLD_BACK`) and stops text emission once a tool-call marker is detected to prevent markup leaks.
-- **Round-trip**: `role:"tool"` messages are reinjected into the transcript for subsequent turns.
+### 4) Session creation & upstream completion
+4. **Session** — create or reuse a chat session (`/api/v0/chat_session/create`) for a limited number of turns to balance latency and upstream traffic patterns.
+5. **Prompt/model mapping** — internal model IDs map to web modes (e.g. chat/default, reasoner/thinking). The proxy advertises up to **1M tokens** context in `/v1/models`, but the effective accepted context depends on the upstream endpoint/account.
+6. **Completion request** — `POST /api/v0/chat/completion` with flattened prompt and parameters; upstream responds as **SSE** (fragments, snapshots, incremental patches, status events).
 
-### 5) Resilience, pacing & observability
-- **Token pool**: round-robin, hot-reload of `tokens.txt`, masked in `/health`, penalties/cooldowns.
-- **Rate limiting**: bucket + min gap + jitter + escalating cooldown, **1 in-flight completion per token**, staggered pre-warming of challenges/sessions (absorbs silent throttling and reduces bursty patterns).
-- **Watchdog**: jittered liveness probes, distinguishes revocation (recoverable `40003`) from **suspension** (not recoverable), optional auto re-login when credentials are configured.
-- **Observability**: `/health`, `/metrics` (Prometheus/JSON), `X-Request-Id`, `X-Ds-*` timings, optional lightweight logs without bodies/secrets.
+### 5) Stream assembly & output translation
+The DeepSeek SSE stream is incrementally reassembled and converted:
+- **Reasoning** fragments (`THINK`) → `reasoning_content` / thinking blocks (format-dependent).
+- **Text** fragments → OpenAI deltas/messages, Anthropic text/thinking deltas, or Vertex/Gemini parts.
+- **Control/usage** → normalized finish reasons and relayed aggregate usage where available.
+
+This includes handling snapshot/append/replace-style updates from the web protocol and emitting client-visible chunks progressively (true streaming).
+
+### 6) Tool calling emulation (no native web function-calling)
+- **Schema injection**: tool definitions, rules, and `tool_choice`/parallel-call constraints are injected into prompt instructions.
+- **Response parsing**: model outputs are parsed into structured tool calls from requested **JSON** or native **DSML** markup (`<｜DSML｜ ...>`), with argument normalization/coercion and deduplication.
+- **Stream safety**: `StreamGate` holds back a short tail and suppresses text emission once a tool-call marker is detected to avoid leaking tool markup to clients.
+- **Multi-turn loop**: tool results (`role:"tool"` / Anthropic `tool_result` / Vertex `functionResponse`) are fed back into subsequent requests.
+
+### 7) Observability & operations
+- **Health/metrics**: `/health` (masked status, warm/rate/watchdog/auth/metrics) and `/metrics` (Prometheus or JSON).
+- **Tracing/timing**: `X-Request-Id` and `X-Ds-*` timing headers; optional lightweight request logging (`LOG_REQUESTS=1`) without bodies/secrets.
+- **Safety defaults**: conservative pacing, hot token reload, atomic token persistence (`0600`), and upstream-decoding-safe request behavior (`Accept-Encoding: identity`).
 
 ---
 

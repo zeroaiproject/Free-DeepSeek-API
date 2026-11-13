@@ -9,17 +9,14 @@
 
 ## Configuration (OpenAI-compatible endpoint)
 
-Claude Code and its ecosystem evolve; depending on your version, point the OpenAI-compatible backend to the proxy:
+Claude Code and third-party integrations evolve. Use this proxy where your setup supports an **OpenAI-compatible** backend.
 
 ```bash
 export OPENAI_API_KEY="public"                 # or your API_KEY value if enabled
 export OPENAI_BASE_URL="http://127.0.0.1:8787/v1"
 ```
 
-Then select a model exposed by the proxy (if supported by your tool):
-
-- `deepseek-chat`
-- `deepseek-reasoner`
+Then select a model exposed by the proxy (if supported): `deepseek-chat` or `deepseek-reasoner`.
 
 Generic example (OpenAI-compatible client/runner):
 
@@ -29,18 +26,19 @@ OPENAI_API_KEY=public \
 claude --model deepseek-chat
 ```
 
-> Adapt the flag/model selection to your version (`--model`, config file, or profile). Exact model IDs are returned by `GET /v1/models`.
+> Adapt flags, env vars, and model selection to your installed version. Exact IDs are listed by `GET /v1/models`.
 
 ## Capabilities
 
 - **Streaming**: supported.
-- **Tool use / actions**: supported via the proxy's tool emulation (injected schemas, JSON/DSML parsing). Behavior may differ from native Anthropic tool use.
-- **Reasoning**: `deepseek-reasoner` returns `reasoning_content`.
+- **Tool use / actions**: supported via the proxy's tool emulation (injected schemas, JSON/DSML parsing). Behavior may differ from native tool use.
+- **Reasoning**: `deepseek-reasoner` returns `reasoning_content` (OpenAI mode) and mapped thinking content on compatible formats.
 - **Context**: advertised window up to **1M tokens** (effective upstream limit applies).
+- **Anthropic-compatible endpoint**: this proxy also serves `POST /v1/messages`, which may work with tools/adapters targeting Anthropic's Messages API format.
 
 ## Limitations
 
-- No native Anthropic protocol (`/v1/messages`) in this proxy — OpenAI-compatible only (`/v1/chat/completions`).
+- Backend is DeepSeek web via proxy (not official Claude/Anthropic models).
 - Aggregated usage (no prompt/completion split from upstream).
 - Upstream pacing/rate limits and DeepSeek account policies apply.
 
