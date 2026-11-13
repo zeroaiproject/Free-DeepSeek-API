@@ -1,17 +1,17 @@
 # Free DeepSeek API
 
-An OpenAI-compatible HTTP server that talks to `chat.deepseek.com` with a normal
-web account token. No API key from DeepSeek, no credit card, no rate plan.
+> OpenAI-compatible proxy for `chat.deepseek.com` — **zero npm dependencies**, Node 18+.
 
-It solves DeepSeek's `DeepSeekHashV1` proof-of-work natively (the original
-`sha3_wasm_bg` module, executed as-is) and relays the SSE stream as
-OpenAI `chat.completion` / `chat.completion.chunk` objects.
+Use DeepSeek's web chat behind a standard `/v1/chat/completions` API: streaming, reasoning model, tool calling emulation, token pool, auto re-login, and an experimental account-signup pipeline.
 
 ```
-your app  ──OpenAI format──▶  this proxy  ──PoW + bearer token──▶  chat.deepseek.com
+your app  ── OpenAI format ──▶  this proxy  ── PoW + bearer token ──▶  chat.deepseek.com
 ```
 
-Zero npm dependencies. Node 18+.
+- Solves `DeepSeekHashV1` proof-of-work natively (ships the original `sha3_wasm_bg` WASM).
+- Relays SSE as OpenAI `chat.completion` / `chat.completion.chunk` (true streaming).
+- Emulates `tools` / `tool_choice` (JSON + DSML parsing, stream-safe hold-back).
+- Round-robin token pool, rate limiting, liveness watchdog, hot token reload.
 
 ---
 
@@ -129,8 +129,10 @@ node scripts/test-signup.js
 
 ## Configuration
 
-All optional, read from the environment (`.env` is not auto-loaded; use your
-process manager or `export`).
+All optional, read from the environment. A local `.env` file is auto-loaded at
+startup (existing environment variables are not overridden). Keep secrets in
+`.env` / `tokens.txt` — both are gitignored and persisted tokens are written with
+`0600` permissions.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |

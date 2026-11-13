@@ -2,6 +2,9 @@
 // OpenAI-compatible HTTP server backed by chat.deepseek.com.
 // Zero npm dependencies.
 
+const { loadEnv } = require('./lib/env');
+loadEnv();
+
 const http = require('http');
 const crypto = require('crypto');
 
@@ -584,8 +587,9 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': '*',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Api-Key',
       'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+      'Access-Control-Max-Age': '86400',
     });
     return res.end();
   }
@@ -627,19 +631,51 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+let shuttingDown = false;
+
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[server] ${signal || 'shutdown'} received, stopping…`);
+  try { watchdog.stop && watchdog.stop(); } catch {}
+  server.close(() => {
+    console.log('[server] stopped');
+    process.exit(0);
+  });
+  setTimeout(() => process.exit(1), 5000).unref();
+}
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('unhandledRejection', (e) => {
+  console.error('[unhandledRejection]', e && e.stack || e);
+});
+process.on('uncaughtException', (e) => {
+  console.error('[uncaughtException]', e && e.stack || e);
+});
+
 (async () => {
-  await initPow();
+  try {
+    await initPow();
+  } catch (e) {
+    console.error('[fatal] failed to initialize PoW module:', e && e.message || e);
+    process.exit(1);
+  }
+
   if (!pool.size) {
     console.warn('[warn] no DeepSeek token configured — set DEEPSEEK_TOKENS or tokens.txt');
   }
+
   server.listen(PORT, HOST, () => {
-    console.log(`Free DeepSeek API listening on http://${HOST}:${PORT}`);
-    console.log(`  tokens loaded : ${pool.size}`);
+    console.log(`\n  Free DeepSeek API  (OpenAI-compatible)`);
+    console.log(`  ───────────────────────────────────────`);
+    console.log(`  listening     : http://${HOST}:${PORT}`);
+    console.log(`  health        : http://${HOST}:${PORT}/health`);
+    console.log(`  tokens        : ${pool.size}`);
     console.log(`  default model : ${DEFAULT_MODEL}`);
     console.log(`  watchdog      : ${watchdog.intervalMs ? watchdog.intervalMs + 'ms' : 'off'}`);
-    if (!DS_EMAIL || !DS_PASSWORD) {
-      console.log('  auto re-login : off (set DEEPSEEK_EMAIL + DEEPSEEK_PASSWORD)');
-    }
+    console.log(`  auto re-login : ${DS_EMAIL && DS_PASSWORD ? 'on' : 'off (set DEEPSEEK_EMAIL + DEEPSEEK_PASSWORD)'}`);
+    console.log('');
     watchdog.start();
   });
 })();
