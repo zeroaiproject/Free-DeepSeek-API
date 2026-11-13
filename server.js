@@ -19,6 +19,10 @@ const { StreamGate } = require('./lib/streamgate');
 const { buildToolInstructions, extractToolCalls, buildTranscript, toolDefs } = require('./lib/tools');
 const { init: initPow } = require('./lib/pow');
 
+const pkg = (() => { try { return require('./package.json'); } catch { return {}; } })();
+const VERSION = pkg.version || '0.0.0';
+const STARTED_AT = Date.now();
+
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || '0.0.0.0';
 const API_KEY = process.env.API_KEY || '';
@@ -228,18 +232,33 @@ async function handleChat(req, res) {
       'account_suspended'
     );
   }
-  const body = await readBody(req);
+
+  let body;
+  try {
+    body = await readBody(req);
+  } catch (e) {
+    const msg = String(e && e.message || e);
+    if (/payload too large/i.test(msg)) return err(res, 413, 'payload too large', 'invalid_request_error');
+    return err(res, 400, 'invalid JSON body', 'invalid_request_error');
+  }
+
+  if (!body || !Array.isArray(body.messages) || body.messages.length === 0) {
+    return err(res, 400, '`messages` must be a non-empty array', 'invalid_request_error', 'invalid_messages');
+  }
+
   if (process.env.DEBUG_BODY_DIR) {
     try {
       const fs = require('fs');
       const p = require('path');
+      fs.mkdirSync(process.env.DEBUG_BODY_DIR, { recursive: true });
       fs.writeFileSync(
         p.join(process.env.DEBUG_BODY_DIR, `req-${Date.now()}.json`),
         JSON.stringify(body, null, 2)
       );
     } catch {}
   }
-  const model = body.model || DEFAULT_MODEL;
+
+  const model = typeof body.model === 'string' && body.model ? body.model : DEFAULT_MODEL;
   const stream = !!body.stream;
   const thinking = /reason/i.test(model) || body.reasoning === true;
 
@@ -588,7 +607,7 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Api-Key',
-      'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+      'Access-Control-Allow-Methods': 'GET,POST,HEAD,OPTIONS',
       'Access-Control-Max-Age': '86400',
     });
     return res.end();
@@ -600,11 +619,35 @@ const server = http.createServer(async (req, res) => {
     if (key !== API_KEY) return err(res, 401, 'invalid api key', 'authentication_error');
   }
 
+  const method = req.method || 'GET';
+
   try {
-    if (url.pathname === '/' || url.pathname === '/health') {
-      pool.reloadIfChanged();
-      return send(res, 200, {
+    if ((url.pathname === '/' || url.pathname === '/v1') && (method === 'GET' || method === 'HEAD')) {
+      const info = {
+        name: 'Free DeepSeek API',
+        version: VERSION,
         status: 'ok',
+        openai_compatible: true,
+        endpoints: {
+          health: '/health',
+          models: '/v1/models',
+          chat: '/v1/chat/completions',
+        },
+        docs: 'https://github.com/zeroaiproject/Free-DeepSeek-API',
+      };
+      if (method === 'HEAD') {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+        return res.end();
+      }
+      return send(res, 200, info);
+    }
+
+    if (url.pathname === '/health' && (method === 'GET' || method === 'HEAD')) {
+      pool.reloadIfChanged();
+      const body = {
+        status: 'ok',
+        version: VERSION,
+        uptime_s: Math.floor((Date.now() - STARTED_AT) / 1000),
         tokens: pool.status(),
         warm: warmer.stats(),
         rate: limiter.stats(),
@@ -616,18 +659,29 @@ const server = http.createServer(async (req, res) => {
           lastError: lastAuthError,
         },
         models: MODELS.map((m) => m.id),
-      });
+      };
+      if (method === 'HEAD') {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+        return res.end();
+      }
+      return send(res, 200, body);
     }
-    if (url.pathname === '/v1/models' && req.method === 'GET') {
+
+    if (url.pathname === '/v1/models' && method === 'GET') {
       return send(res, 200, { object: 'list', data: MODELS });
     }
-    if (url.pathname === '/v1/chat/completions' && req.method === 'POST') {
+
+    if ((url.pathname === '/v1/chat/completions' || url.pathname === '/chat/completions') && method === 'POST') {
       return await handleChat(req, res);
     }
-    return err(res, 404, 'not found');
+
+    if (method !== 'GET' && method !== 'POST' && method !== 'HEAD') {
+      return err(res, 405, 'method not allowed', 'invalid_request_error');
+    }
+    return err(res, 404, 'not found', 'invalid_request_error');
   } catch (e) {
-    if (!res.headersSent) return err(res, 500, e.message, 'internal_error');
-    res.end();
+    if (!res.headersSent) return err(res, 500, e.message || 'internal error', 'internal_error');
+    try { res.end(); } catch {}
   }
 });
 
@@ -667,10 +721,11 @@ process.on('uncaughtException', (e) => {
   }
 
   server.listen(PORT, HOST, () => {
-    console.log(`\n  Free DeepSeek API  (OpenAI-compatible)`);
-    console.log(`  ───────────────────────────────────────`);
+    const shownHost = HOST === '0.0.0.0' ? '127.0.0.1' : HOST;
+    console.log(`\n  Free DeepSeek API v${VERSION}  (OpenAI-compatible)`);
+    console.log(`  ─────────────────────────────────────────────`);
     console.log(`  listening     : http://${HOST}:${PORT}`);
-    console.log(`  health        : http://${HOST}:${PORT}/health`);
+    console.log(`  local health  : http://${shownHost}:${PORT}/health`);
     console.log(`  tokens        : ${pool.size}`);
     console.log(`  default model : ${DEFAULT_MODEL}`);
     console.log(`  watchdog      : ${watchdog.intervalMs ? watchdog.intervalMs + 'ms' : 'off'}`);

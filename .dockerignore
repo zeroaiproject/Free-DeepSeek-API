@@ -1,0 +1,17 @@
+node_modules
+.git
+.env
+.env.*
+!.env.example
+.server.pid
+.server.log
+*.log
+*.bak
+*.bak.*
+tokens.txt
+tokens.json
+npm-debug.log*
+scripts/*.local.*
+.DS_Store
+tmp
+/tmp
