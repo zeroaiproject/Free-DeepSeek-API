@@ -492,6 +492,7 @@ lib/pool.js                   round-robin token pool, hot reload, re-login swap
 lib/auth.js                   email+password login (also used for auto re-login)
 lib/sha3_wasm_bg.*.wasm       original PoW module
 scripts/login.js              email+password -> userToken (CLI wrapper)
+scripts/token-check.js        verify the tokens in tokens.txt are still alive
 scripts/pow-selftest.js       offline PoW vector test
 scripts/test-parsers.js       offline tool-call parser tests
 scripts/test-tools.js         end-to-end tool-calling tests
