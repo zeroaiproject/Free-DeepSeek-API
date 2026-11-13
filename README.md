@@ -328,7 +328,9 @@ DeepSeek requires an `X-Ds-Pow-Response` proof-of-work for `/api/v0/chat/complet
 Step 2 is **not** SHA-256 / NIST SHA3 — it’s a custom Keccak variant compiled to WASM (`wasm_solve`). `lib/sha3_wasm_bg.7b9ca65ddd.wasm` is shipped and executed as-is.
 
 ```bash
-npm run test:pow   # answer=137201 expected=137201  (~100ms)  POW SELFTEST OK
+npm run test:pow       # offline PoW selftest
+npm run test:offline   # parsers + streamgate + PoW (no network)
+npm run test:all       # offline + signup gate smoke test
 ```
 
 <details>
@@ -421,6 +423,12 @@ run.sh                        start/restart with pidfile
 ```bash
 docker build -t free-deepseek-api .
 docker run -p 8787:8787 -e API_KEY=sk-local -v "$PWD/tokens.txt:/app/tokens.txt:ro" free-deepseek-api
+```
+
+Or with Compose (uses `./tokens.txt` and `./.env`):
+
+```bash
+docker compose up -d --build
 ```
 
 ---

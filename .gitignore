@@ -13,4 +13,5 @@ tokens.json
 /tmp/
 .DS_Store
 npm-debug.log*
-scripts/*.local.* 
+scripts/*.local.*
+.github/*.local.* 

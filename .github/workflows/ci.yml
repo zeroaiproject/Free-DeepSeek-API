@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [18, 20, 22]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Syntax check
+        run: |
+          node --check server.js
+          node --check lib/env.js lib/pool.js lib/deepseek.js lib/pow.js lib/stream.js lib/streamgate.js lib/tools.js lib/ratelimit.js lib/warm.js lib/watchdog.js lib/auth.js lib/signup.js lib/captcha.js lib/mailbox.js
+
+      - name: Offline tests
+        run: npm run test:offline
+
+      # Network smoke tests (guest PoW + signup gates). Non-fatal if the upstream
+      # is unreachable or rate-limiting CI egress, but informative when it passes.
+      - name: Signup gate smoke test (best-effort)
+        continue-on-error: true
+        timeout-minutes: 3
+        run: node scripts/test-signup.js

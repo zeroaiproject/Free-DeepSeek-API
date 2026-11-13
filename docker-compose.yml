@@ -1,0 +1,25 @@
+services:
+  freedeepseek:
+    build: .
+    container_name: freedeepseek
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8787}:8787"
+    environment:
+      PORT: 8787
+      HOST: 0.0.0.0
+      # API_KEY: sk-local
+      # DEEPSEEK_EMAIL: ""
+      # DEEPSEEK_PASSWORD: ""
+      # DEEPSEEK_TOKEN_PERSIST: "1"
+      # DEEPSEEK_PROXY: ""
+      # LOG_REQUESTS: "1"
+    volumes:
+      - ./tokens.txt:/app/tokens.txt
+      - ./.env:/app/.env:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8787/health"]
+      interval: 30s
+      timeout: 3s
+      start_period: 5s
+      retries: 3

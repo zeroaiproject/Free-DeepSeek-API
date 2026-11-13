@@ -1,30 +1,44 @@
 {
   "name": "free-deepseek-api",
   "version": "1.0.0",
-  "description": "Use 100% Illegal and 100% Free DeepSeek API.",
+  "description": "OpenAI-compatible proxy for chat.deepseek.com with native PoW, streaming, tool-calling emulation, and zero npm dependencies.",
   "main": "server.js",
   "type": "commonjs",
   "engines": {
     "node": ">=18"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zeroaiproject/Free-DeepSeek-API.git"
+  },
+  "homepage": "https://github.com/zeroaiproject/Free-DeepSeek-API#readme",
+  "bugs": {
+    "url": "https://github.com/zeroaiproject/Free-DeepSeek-API/issues"
+  },
   "scripts": {
     "start": "node server.js",
-    "test:pow": "node scripts/pow-selftest.js",
     "bench": "node scripts/bench.js",
-    "selftest": "node scripts/pow-selftest.js && node scripts/order-test.js seq",
-    "test": "node scripts/test-parsers.js",
-    "test:tools": "node scripts/test-tools.js",
-    "test:parsers": "node scripts/test-parsers.js",
-    "test:signup": "node scripts/test-signup.js",
+    "login": "node scripts/login.js",
+    "signup": "node scripts/signup.js",
     "token:check": "node scripts/token-check.js",
-    "signup": "node scripts/signup.js"
+    "test": "node scripts/test-parsers.js",
+    "test:pow": "node scripts/pow-selftest.js",
+    "test:parsers": "node scripts/test-parsers.js",
+    "test:streamgate": "node scripts/test-streamgate.js",
+    "test:signup": "node scripts/test-signup.js",
+    "test:tools": "node scripts/test-tools.js",
+    "test:offline": "node scripts/test-parsers.js && node scripts/test-streamgate.js && node scripts/pow-selftest.js",
+    "test:all": "node scripts/test-parsers.js && node scripts/test-streamgate.js && node scripts/pow-selftest.js && node scripts/test-signup.js",
+    "selftest": "node scripts/pow-selftest.js && node scripts/order-test.js seq"
   },
   "keywords": [
     "deepseek",
     "openai",
     "proxy",
     "api",
-    "free"
+    "chat-completions",
+    "streaming",
+    "tool-calling"
   ],
   "license": "WTFPL"
 }
