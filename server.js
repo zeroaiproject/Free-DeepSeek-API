@@ -295,11 +295,18 @@ function usageChunk(id, model, created, tokens) {
 }
 
 function toToolCalls(calls) {
-  return calls.map((c) => ({
-    id: 'call_' + crypto.randomBytes(12).toString('hex'),
-    type: 'function',
-    function: { name: c.name, arguments: JSON.stringify(c.arguments ?? {}) },
-  }));
+  return calls.map((c) => {
+    let args = c.arguments ?? {};
+    if (typeof args === 'string') {
+      try { args = JSON.parse(args); } catch { args = { value: args }; }
+    }
+    if (!args || typeof args !== 'object' || Array.isArray(args)) args = {};
+    return {
+      id: 'call_' + crypto.randomBytes(12).toString('hex'),
+      type: 'function',
+      function: { name: c.name, arguments: JSON.stringify(args) },
+    };
+  });
 }
 
 // Buffers the first line of the upstream body to distinguish an SSE stream

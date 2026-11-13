@@ -1,0 +1,67 @@
+# Free DeepSeek API
+
+> OpenAI-compatible proxy for `chat.deepseek.com` (DeepSeek web endpoint) with native PoW, streaming, tool-calling emulation, and zero npm runtime dependencies.
+
+- Repo: https://github.com/zeroaiproject/Free-DeepSeek-API
+- License: GLWTS
+- Runtime: Node.js >= 18, CommonJS, no npm runtime dependencies
+
+## What it does
+
+- Exposes an OpenAI-compatible API backed by DeepSeek web `userToken`s:
+  - `GET /` or `/v1` — service info (HTML for browsers, JSON for clients)
+  - `GET /health` — status, version/uptime, masked token/warm/rate/watchdog/auth/metrics
+  - `GET /metrics` — Prometheus text (or JSON with `Accept: application/json`)
+  - `GET /v1/models` — `deepseek-chat`, `deepseek-reasoner` (+ capability hints)
+  - `POST /v1/chat/completions` — streaming and non-streaming, `tools`/`tool_choice`/`parallel_tool_calls`, reasoning (`reasoning_content`)
+- Solves `DeepSeekHashV1` proof-of-work natively via shipped WASM (`lib/sha3_wasm_bg.*.wasm`).
+- Emulates tool calling (web endpoint has none): injects tool schemas, parses JSON and DSML tool-call outputs, stream-safe hold-back to prevent leaks.
+- Resilience: round-robin token pool, hot token reload, per-token rate limiting with jitter/gap/escalating cooldown, one in-flight completion per token, pre-warm (challenges/sessions), liveness watchdog, optional auto re-login and outbound proxy.
+
+## Quick start
+
+```bash
+git clone https://github.com/zeroaiproject/Free-DeepSeek-API.git
+cd free-deepseek-api
+cp .env.example .env        # optional, auto-loaded
+echo "$DEEPSEEK_USER_TOKEN" > tokens.txt
+./run.sh                    # or: npm start
+```
+
+```bash
+curl http://127.0.0.1:8787/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"deepseek-chat","messages":[{"role":"user","content":"Hello"}]}'
+```
+
+Token: from `localStorage.getItem('userToken')` on https://chat.deepseek.com, or `node scripts/login.js <email> <password>`. Experimental signup: `node scripts/signup.js` (guest PoW automated; captcha + mailbox gates apply).
+
+## Important behavior and limits
+
+- **No refresh token:** tokens can only be re-minted via login/register/oauth; auto re-login needs account password.
+- **`40003` ambiguity:** token revocation (re-login helps) vs **account suspension** (all endpoints fail, including auth checks) — suspension is policy-driven and cannot be guaranteed prevented; proxy uses conservative pacing/jitter/backoff and reports state in `/health`.
+- **Rate limiting:** upstream silently throttles bursts (empty 200 stream). Proxy enforces token bucket + gaps + cooldown with jitter/escalation; requests wait/retry rather than hard-failing when possible.
+- **Security:** keep `.env`/`tokens.txt` private (gitignored, tokens persisted atomically `0600`); protect with `API_KEY` if exposed; `/health` shows masked token status.
+
+## Key files
+
+- `server.js` — HTTP server, OpenAI compatibility, routing, metrics
+- `lib/deepseek.js` — upstream client, PoW header, CONNECT proxy tunnel
+- `lib/pow.js`, `lib/sha3_wasm_bg.7b9ca65ddd.wasm` — PoW solver
+- `lib/tools.js`, `lib/streamgate.js`, `lib/stream.js` — tool-calling emulation and streaming
+- `lib/pool.js`, `lib/ratelimit.js`, `lib/warm.js`, `lib/watchdog.js` — token/rate/session management
+- `lib/auth.js`, `lib/signup.js`, `lib/captcha.js`, `lib/mailbox.js` — auth and signup
+- `lib/metrics.js`, `lib/env.js` — metrics and config loading
+- `scripts/` — login/signup, tests (`test-parsers`, `test-streamgate`, `test-signup`, `pow-selftest`, `test-tools`), bench, probes
+
+## Tests
+
+```bash
+npm run test:offline   # parsers + streamgate + PoW (no network)
+npm run test:all       # offline + signup gate smoke test
+npm run test:signup    # live gate checks (no captcha solver needed)
+```
+
+## Config highlights
+
+`.env` auto-loaded. See `README.md` and `.env.example` for full list: `PORT`, `HOST`, `API_KEY`, `DEFAULT_MODEL`, `DEEPSEEK_TOKENS(_FILE)`, `WARM_*`, `RATE_*`, `WATCHDOG_*`, `DEEPSEEK_PROXY`, `DEEPSEEK_EMAIL/PASSWORD/TOKEN_PERSIST`, `CAPTCHA_*`, `MAILBOX*`, `IMAP_*`, `LOG_REQUESTS`.
