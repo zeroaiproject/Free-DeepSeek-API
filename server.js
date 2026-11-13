@@ -35,20 +35,54 @@ const DS_EMAIL = process.env.DEEPSEEK_EMAIL || '';
 const DS_PASSWORD = process.env.DEEPSEEK_PASSWORD || '';
 const PERSIST_TOKEN = process.env.DEEPSEEK_TOKEN_PERSIST === '1';
 
+// A revoked token is not the only way an account dies. A policy suspension
+// answers every endpoint with 40003 too, and no amount of re-login helps until
+// the suspension expires. Retrying the login on every request would just
+// hammer an endpoint that is already annoyed, so failures are backed off and a
+// suspension is remembered.
+const RELOGIN_BACKOFF_MS = Number(process.env.RELOGIN_BACKOFF_MS || 600_000);
 let reloginInFlight = null;
+let reloginCooldownUntil = 0;
+let suspendedUntil = 0;
+let lastAuthError = null;
+
+function isSuspension(message) {
+  return /suspend|violation|banned|forbidden|封禁|违规|冻结/i.test(String(message || ''));
+}
+
+// "…suspended until November 16, 2026 07:40" -> epoch ms, when parseable.
+function parseSuspensionUntil(message) {
+  const m = String(message || '').match(/until\s+(.+?)(?:[.;]|$)/i);
+  if (m) {
+    const t = Date.parse(m[1].trim());
+    if (Number.isFinite(t) && t > Date.now()) return t;
+  }
+  return Date.now() + 24 * 3600_000;
+}
+
 function relogin(deadToken) {
   if (!DS_EMAIL || !DS_PASSWORD) return Promise.resolve(null);
+  if (Date.now() < reloginCooldownUntil) return Promise.resolve(null);
   if (reloginInFlight) return reloginInFlight;
 
   reloginInFlight = login(DS_EMAIL, DS_PASSWORD)
     .then((r) => {
       pool.swap(deadToken, r.token);
       if (PERSIST_TOKEN) pool.persist();
+      suspendedUntil = 0;
+      lastAuthError = null;
       console.log('[auth] token revoked, re-login succeeded');
       return r.token;
     })
     .catch((e) => {
-      console.log('[auth] re-login failed:', e.message);
+      lastAuthError = e.message;
+      reloginCooldownUntil = Date.now() + RELOGIN_BACKOFF_MS;
+      if (isSuspension(e.message)) {
+        suspendedUntil = parseSuspensionUntil(e.message);
+        console.log('[auth] ACCOUNT SUSPENDED until', new Date(suspendedUntil).toISOString(), '-', e.message);
+      } else {
+        console.log('[auth] re-login failed:', e.message);
+      }
       return null;
     })
     .finally(() => {
@@ -180,6 +214,17 @@ const HOLD_BACK = Number(process.env.STREAM_HOLD_BACK || 32);
 async function handleChat(req, res) {
   // Pick up a token pasted into tokens.txt without a restart.
   pool.reloadIfChanged();
+
+  // Nothing below can succeed while the account is suspended, and every
+  // attempt would be another request on a flagged account.
+  if (suspendedUntil > Date.now() && !pool.pick()) {
+    return err(
+      res,
+      503,
+      `DeepSeek account suspended until ${new Date(suspendedUntil).toISOString()}`,
+      'account_suspended'
+    );
+  }
   const body = await readBody(req);
   if (process.env.DEBUG_BODY_DIR) {
     try {
@@ -224,6 +269,14 @@ async function handleChat(req, res) {
     // Every token is cooling down (e.g. right after penalize() on the previous
     // attempt). Wait briefly for the soonest one instead of failing the request.
     if (!token) {
+      if (suspendedUntil > Date.now()) {
+        return err(
+          res,
+          503,
+          `DeepSeek account suspended until ${new Date(suspendedUntil).toISOString()}`,
+          'account_suspended'
+        );
+      }
       const wait = pool.nextAvailableMs();
       if (!Number.isFinite(wait) || wait > MAX_WAIT_MS) {
         return err(res, 503, 'no DeepSeek token available', 'service_unavailable');
@@ -552,6 +605,12 @@ const server = http.createServer(async (req, res) => {
         warm: warmer.stats(),
         rate: limiter.stats(),
         watchdog: watchdog.stats(),
+        auth: {
+          configured: !!(DS_EMAIL && DS_PASSWORD),
+          suspendedUntil: suspendedUntil ? new Date(suspendedUntil).toISOString() : null,
+          reloginCooldownMs: Math.max(0, reloginCooldownUntil - Date.now()),
+          lastError: lastAuthError,
+        },
         models: MODELS.map((m) => m.id),
       });
     }

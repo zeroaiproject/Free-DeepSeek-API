@@ -107,6 +107,7 @@ process manager or `export`).
 | `DEEPSEEK_EMAIL` | — | Account email, enables automatic re-login |
 | `DEEPSEEK_PASSWORD` | — | Account password, enables automatic re-login |
 | `DEEPSEEK_TOKEN_PERSIST` | — | `1` writes a re-login token back to `tokens.txt` |
+| `RELOGIN_BACKOFF_MS` | `600000` | Pause between re-login attempts after a failure |
 | `DEBUG_BODY_DIR` | — | Dump each incoming request body there (debugging) |
 
 Multiple tokens are load-balanced round-robin. A token that returns
@@ -144,20 +145,41 @@ so there is no cookie jar to keep alive either.
 A token therefore cannot be refreshed. It can only be **re-minted by logging in
 again**, and it does not need refreshing as long as it stays alive.
 
-### What actually kills a token
+### Two very different `40003`s
 
-Measured on a real account, one token, real completions:
+`40003 Authorization Failed` is the same code for two unrelated failures, and
+the fix is opposite in each case:
+
+| what happened | how to tell | fix |
+| --- | --- | --- |
+| the token was revoked | logging in works and returns a new token | re-login |
+| **the account was suspended** | the web UI shows a *violation of user policies* notice; logging in also fails | wait, or use another account |
+
+A suspension is account-level: every endpoint returns `40003`, including
+`GET /users/auth_token/list`, which works normally with a revoked token. The
+account is unusable until the date in the notice. Re-login does not help, so the
+proxy backs off (`RELOGIN_BACKOFF_MS`, 10 min), remembers the suspension date,
+reports it in `/health` under `auth.suspendedUntil`, and answers
+`503 account_suspended` immediately instead of spending retries.
+
+Nothing in this project can prevent a suspension. It is a policy decision made
+by DeepSeek's abuse detection, not a rate limit you can tune under. What the
+proxy can do is stay small enough to look uninteresting.
+
+### The rate limit is real and separate
+
+Measured on one account, one token, real completions:
 
 | pattern | result |
 | --- | --- |
 | 8 completions back-to-back | all succeed |
-| 9th back-to-back | empty `200` stream (silent throttle) |
+| 9th back-to-back | empty `200` stream (silent throttle, *not* `40003`) |
 | 12 completions, 5 s apart | all succeed |
 | 20 sequential through the limiter | 20/20, token alive after |
-| agent tool loop, 8+ calls per turn, turns back-to-back | **token revoked (`40003`)** |
 
-So it is burst traffic, not the clock and not the IP. Two things in the proxy
-used to generate that burst:
+The throttle recovers in ~30 s and never revokes anything by itself. Hammering
+past it is still a bad idea, and two things in the proxy used to generate that
+burst:
 
 - `warmer` pre-created a fresh chat session per request. Every session is
   another upstream call, so one client request cost three upstream requests.
@@ -205,6 +227,17 @@ a verification code, and requesting one for a disposable domain returns
 
 Without a password, keep several tokens in `tokens.txt` from different accounts
 and let the pool rotate. Paste a new one and it is picked up without a restart.
+
+### Keeping an account alive
+
+A suspension is triggered by behaviour, so the only defence is to behave like a
+person with a browser tab open:
+
+- Keep sustained volume low. An agent loop that fires a completion every few
+  seconds for hours is the pattern that gets flagged.
+- One account per machine and per IP, not a pool of tokens on one account.
+- A residential IP helps; a datacenter IP is an extra signal (see below).
+- Don't run the proxy 24/7 against the free web endpoint for production traffic.
 
 ### Datacenter IPs
 
