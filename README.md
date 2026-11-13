@@ -285,12 +285,17 @@ curl http://127.0.0.1:8787/v1beta/models/deepseek-chat:generateContent \
 
 ## ⚙️ Configuration
 
-All variables are optional. `.env` is **auto-loaded** (without overriding existing vars). Secrets (`.env`, `tokens.txt`) are gitignored; tokens are persisted with mode `0600`.
+Most variables are optional. `.env` is **auto-loaded** (without overriding existing vars). Secrets (`.env`, `tokens.txt`) are gitignored; tokens are persisted with mode `0600`.
+
+> **Security note:** binding to a non-loopback `HOST` without `API_KEY` is refused at startup unless `ALLOW_INSECURE_EXPOSED=1` is explicitly set. Debug dumps (if enabled) are redacted.
 
 | Variable | Default | Purpose |
 |---|---:|---|
-| `PORT` / `HOST` | `8787` / `0.0.0.0` | Listen address |
-| `API_KEY` | — | Protect the proxy (`Authorization: Bearer`) |
+| `PORT` / `HOST` | `8787` / `0.0.0.0` | Listen address (`127.0.0.1` recommended for local-only) |
+| `API_KEY` | — | Protect the proxy (`Authorization: Bearer` / `x-api-key`) |
+| `ALLOW_INSECURE_EXPOSED` | `0` | Allow non-loopback bind without `API_KEY` (unsafe override) |
+| `CORS_ORIGIN` | `*` | CORS allowed origin for browser clients |
+| `BODY_LIMIT_BYTES` / `BODY_TIMEOUT_MS` | `33554432` / `60000` | Request body size/read timeout limits |
 | `DEFAULT_MODEL` | `deepseek-chat` | Default model |
 | `DEEPSEEK_TOKENS` / `DEEPSEEK_TOKENS_FILE` | — / `./tokens.txt` | Token pool (hot-reload) |
 | `DEEPSEEK_EMAIL` / `DEEPSEEK_PASSWORD` / `DEEPSEEK_TOKEN_PERSIST` | — | Auto re-login + persistence |
@@ -321,13 +326,17 @@ All variables are optional. `.env` is **auto-loaded** (without overriding existi
 ## 🗂️ Repository layout
 
 ```text
-server.js                 HTTP server, OpenAI layer, routing, metrics
+server.js                 HTTP server, routing, handlers, orchestration
 lib/
   deepseek.js             Upstream client (challenge/session/completion, proxy tunnel)
   pow.js                  WASM PoW solver
   stream.js               SSE assembly → fragments
   streamgate.js           Stream hold-back / tool-call marker detection
   tools.js                Tool emulation (prompt, JSON/DSML parsing, transcript)
+  compat.js               Anthropic/Vertex format translation helpers
+  tokenizer.js            Heuristic token estimator (count endpoints)
+  body.js                 Request body parsing (byte limits/timeouts)
+  security.js             Redaction and basic security helpers
   pool.js                 Token pool, hot-reload, swap/re-login
   ratelimit.js            Bucket + mutex + pacing/jitter/cooldown
   warm.js                 Pre-warm challenges/sessions
@@ -337,6 +346,7 @@ lib/
   metrics.js / env.js     Metrics and .env loading
 scripts/                  login, signup, tests, bench, probes
 tutos/                    Integration guides (OpenCode, Cursor, Cline, Aider, etc.)
+CHANGELOG.md              Project change history
 run.sh                    start/restart helper (pidfile)
 ```
 

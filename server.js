@@ -21,6 +21,8 @@ const { init: initPow } = require('./lib/pow');
 const { Metrics } = require('./lib/metrics');
 const compat = require('./lib/compat');
 const { estimateTokens } = require('./lib/tokenizer');
+const { readJsonBody } = require('./lib/body');
+const { safeDebugDump, isLoopbackHost } = require('./lib/security');
 
 const pkg = (() => { try { return require('./package.json'); } catch { return {}; } })();
 const VERSION = pkg.version || '0.0.0';
@@ -30,6 +32,10 @@ const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || '0.0.0.0';
 const API_KEY = process.env.API_KEY || '';
 const DEFAULT_MODEL = process.env.DEFAULT_MODEL || 'deepseek-chat';
+const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
+const BODY_LIMIT_BYTES = Number(process.env.BODY_LIMIT_BYTES || 32 * 1024 * 1024);
+const BODY_TIMEOUT_MS = Number(process.env.BODY_TIMEOUT_MS || 60_000);
+const ALLOW_INSECURE_EXPOSED = process.env.ALLOW_INSECURE_EXPOSED === '1';
 
 const pool = TokenPool.load();
 const warmer = new Warmer();
@@ -129,13 +135,17 @@ function withSecurityHeaders(headers = {}) {
   return { ...SECURITY_HEADERS, ...headers };
 }
 
+function corsHeaders(extra = {}) {
+  return { 'Access-Control-Allow-Origin': CORS_ORIGIN, Vary: 'Origin', ...extra };
+}
+
 function send(res, status, obj, extraHeaders = {}) {
   const body = JSON.stringify(obj);
   res.writeHead(status, withSecurityHeaders({
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(body),
     'Cache-Control': 'no-store',
-    'Access-Control-Allow-Origin': '*',
+    ...corsHeaders(),
     ...extraHeaders,
   }));
   res.end(body);
@@ -150,7 +160,7 @@ function sendHtml(res, status, html) {
     'Content-Type': 'text/html; charset=utf-8',
     'Content-Length': Buffer.byteLength(html),
     'Cache-Control': 'no-store',
-    'Access-Control-Allow-Origin': '*',
+    ...corsHeaders(),
   }));
   res.end(html);
 }
@@ -236,25 +246,7 @@ function err(res, status, message, type = 'invalid_request_error', code = null) 
 }
 
 function readBody(req) {
-  return new Promise((resolve, reject) => {
-    let buf = '';
-    req.on('data', (c) => {
-      buf += c;
-      if (buf.length > 32 * 1024 * 1024) {
-        reject(new Error('payload too large'));
-        req.destroy();
-      }
-    });
-    req.on('end', () => {
-      if (!buf) return resolve({});
-      try {
-        resolve(JSON.parse(buf));
-      } catch {
-        reject(new Error('invalid JSON body'));
-      }
-    });
-    req.on('error', reject);
-  });
+  return readJsonBody(req, { maxBytes: BODY_LIMIT_BYTES, timeoutMs: BODY_TIMEOUT_MS });
 }
 
 function contentToText(content) {
@@ -382,15 +374,7 @@ async function handleChat(req, res, opts = {}) {
   }
 
   if (process.env.DEBUG_BODY_DIR) {
-    try {
-      const fs = require('fs');
-      const p = require('path');
-      fs.mkdirSync(process.env.DEBUG_BODY_DIR, { recursive: true });
-      fs.writeFileSync(
-        p.join(process.env.DEBUG_BODY_DIR, `req-${Date.now()}.json`),
-        JSON.stringify(body, null, 2)
-      );
-    } catch {}
+    safeDebugDump(process.env.DEBUG_BODY_DIR, 'req', { path: req.url, method: req.method, body });
   }
 
   const model = typeof body.model === 'string' && body.model ? body.model : DEFAULT_MODEL;
@@ -503,7 +487,7 @@ async function handleChat(req, res, opts = {}) {
             'Content-Type': 'text/event-stream; charset=utf-8',
             'Cache-Control': 'no-cache, no-transform',
             Connection: 'keep-alive',
-            'Access-Control-Allow-Origin': '*',
+            ...corsHeaders(),
             'X-Accel-Buffering': 'no',
             'X-Ds-Session-Ms': String(sessionMs),
             'X-Ds-Challenge-Ms': String(challengeMs),
@@ -761,7 +745,7 @@ function sendAnthropic(res, status, obj) {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(body),
     'Cache-Control': 'no-store',
-    'Access-Control-Allow-Origin': '*',
+    ...corsHeaders(),
   }));
   res.end(body);
 }
@@ -854,7 +838,7 @@ async function handleAnthropicMessages(req, res) {
             'Content-Type': 'text/event-stream; charset=utf-8',
             'Cache-Control': 'no-cache, no-transform',
             'Connection': 'keep-alive',
-            'Access-Control-Allow-Origin': '*',
+            ...corsHeaders(),
           }));
           sse('message_start', { type: 'message_start', message: { id: msgId, type: 'message', role: 'assistant', model: reqModel, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } } });
         };
@@ -1013,7 +997,7 @@ function sendVertex(res, status, obj) {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(body),
     'Cache-Control': 'no-store',
-    'Access-Control-Allow-Origin': '*',
+    ...corsHeaders(),
   }));
   res.end(body);
 }
@@ -1088,7 +1072,7 @@ async function handleVertexGenerate(req, res, modelFromPath, stream) {
             if (piece) {
               if (!started) {
                 started = true;
-                res.writeHead(200, withSecurityHeaders({ 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', 'Connection': 'keep-alive', 'Access-Control-Allow-Origin': '*', }));
+                res.writeHead(200, withSecurityHeaders({ 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', 'Connection': 'keep-alive', ...corsHeaders(), }));
               }
               writeChunk({ candidates: [{ content: { role: 'model', parts: [{ text: piece }] }, index: 0 }] });
             }
@@ -1114,7 +1098,7 @@ async function handleVertexGenerate(req, res, modelFromPath, stream) {
         handleEvents(extractor.flush());
         if (!started) {
           started = true;
-          res.writeHead(200, withSecurityHeaders({ 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', 'Connection': 'keep-alive', 'Access-Control-Allow-Origin': '*', }));
+          res.writeHead(200, withSecurityHeaders({ 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', 'Connection': 'keep-alive', ...corsHeaders(), }));
         }
         let calls = null;
         if (toolsActive && sg.buffering) calls = extractToolCalls(extractor.text, allowedNames);
@@ -1178,8 +1162,8 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Api-Key',
+      ...corsHeaders(),
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Api-Key, Anthropic-Version, X-Goog-Api-Key',
       'Access-Control-Allow-Methods': 'GET,POST,HEAD,OPTIONS',
       'Access-Control-Max-Age': '86400',
     });
@@ -1189,7 +1173,7 @@ const server = http.createServer(async (req, res) => {
   if (API_KEY) {
     const auth = String(req.headers.authorization || '');
     const bearer = auth.replace(/^Bearer\s+/i, '');
-    const key = bearer || String(req.headers['x-api-key'] || '');
+    const key = bearer || String(req.headers['x-api-key'] || '') || String(req.headers['x-goog-api-key'] || '');
     if (!safeEqual(key, API_KEY)) return err(res, 401, 'invalid api key', 'authentication_error');
   }
 
@@ -1222,7 +1206,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if ((url.pathname === '/' || url.pathname === '/v1' || url.pathname === '/openai/v1') && (method === 'GET' || method === 'HEAD')) {
       if (method === 'HEAD') {
-        res.writeHead(200, withSecurityHeaders({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' }));
+        res.writeHead(200, withSecurityHeaders({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...corsHeaders() }));
         return res.end();
       }
       if (wantsHtml(req)) return sendHtml(res, 200, landingPage());
@@ -1293,7 +1277,7 @@ const server = http.createServer(async (req, res) => {
         models: MODELS.map((m) => m.id),
       };
       if (method === 'HEAD') {
-        res.writeHead(200, withSecurityHeaders({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' }));
+        res.writeHead(200, withSecurityHeaders({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...corsHeaders() }));
         return res.end();
       }
       return send(res, 200, body);
@@ -1310,7 +1294,7 @@ const server = http.createServer(async (req, res) => {
         'Content-Type': 'text/plain; version=0.0.4; charset=utf-8',
         'Content-Length': Buffer.byteLength(body),
         'Cache-Control': 'no-store',
-        'Access-Control-Allow-Origin': '*',
+        ...corsHeaders(),
       }));
       if (method === 'HEAD') return res.end();
       return res.end(body);
@@ -1449,20 +1433,34 @@ process.on('uncaughtException', (e) => {
   if (!pool.size) {
     console.warn('[warn] no DeepSeek token configured — set DEEPSEEK_TOKENS or tokens.txt');
   }
+  if (!isLoopbackHost(HOST) && !API_KEY && !ALLOW_INSECURE_EXPOSED) {
+    console.error('[fatal] refusing to bind non-loopback host without API_KEY. Set API_KEY, or ALLOW_INSECURE_EXPOSED=1 to override (not recommended).');
+    process.exit(1);
+  }
+  if (!isLoopbackHost(HOST) && !API_KEY && ALLOW_INSECURE_EXPOSED) {
+    console.warn('[warn] server is exposed without API_KEY (ALLOW_INSECURE_EXPOSED=1). This is unsafe.');
+  }
 
   server.keepAliveTimeout = 65_000;
   server.headersTimeout = 66_000;
   server.requestTimeout = 0; // streaming completions can be long-lived
+  server.on('clientError', (err, socket) => {
+    try {
+      if (socket.writable) socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+      else socket.destroy();
+    } catch {}
+  });
 
   server.listen(PORT, HOST, () => {
-    const shownHost = HOST === '0.0.0.0' ? '127.0.0.1' : HOST;
-    console.log(`\n  Free DeepSeek API v${VERSION}  (OpenAI-compatible)`);
+    const shownHost = HOST === '0.0.0.0' || HOST === '::' ? '127.0.0.1' : HOST;
+    console.log(`\n  Free DeepSeek API v${VERSION}`);
     console.log(`  ─────────────────────────────────────────────`);
     console.log(`  listening     : http://${HOST}:${PORT}`);
     console.log(`  local health  : http://${shownHost}:${PORT}/health`);
     console.log(`  metrics       : http://${shownHost}:${PORT}/metrics`);
     console.log(`  tokens        : ${pool.size}`);
     console.log(`  default model : ${DEFAULT_MODEL}`);
+    console.log(`  cors origin   : ${CORS_ORIGIN}`);
     console.log(`  watchdog      : ${watchdog.intervalMs ? watchdog.intervalMs + 'ms' : 'off'}`);
     console.log(`  auto re-login : ${DS_EMAIL && DS_PASSWORD ? 'on' : 'off (set DEEPSEEK_EMAIL + DEEPSEEK_PASSWORD)'}`);
     console.log('');

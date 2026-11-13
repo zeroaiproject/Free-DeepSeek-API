@@ -1,7 +1,7 @@
 FROM node:22-alpine
 
 WORKDIR /app
-ENV NODE_ENV=production PORT=8787 HOST=0.0.0.0 DEFAULT_MODEL=deepseek-chat
+ENV NODE_ENV=production PORT=8787 HOST=0.0.0.0 DEFAULT_MODEL=deepseek-chat ALLOW_INSECURE_EXPOSED=1
 
 # No npm install: zero runtime dependencies.
 COPY package.json LICENSE ./

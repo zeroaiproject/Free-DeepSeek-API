@@ -12,16 +12,19 @@ Guidance for coding agents working in this repository.
 
 ## Repo layout
 
-- `server.js` — HTTP server, OpenAI-compat layer, request handling, metrics, auth/watchdog wiring.
+- `server.js` — HTTP server, routing, handlers, request orchestration, metrics/auth/watchdog wiring.
 - `lib/deepseek.js` — upstream client (challenge, session, completion, proxy tunnel).
 - `lib/pow.js` + `lib/sha3_wasm_bg.*.wasm` — PoW solver (original WASM). **Do not replace semantics.**
 - `lib/stream.js`, `lib/streamgate.js` — SSE fragment assembly and stream-safe tool-call hold-back.
 - `lib/tools.js` — tool prompt builder, transcript shaping, JSON/DSML tool-call extraction.
+- `lib/compat.js` — Anthropic/Vertex format translation helpers.
+- `lib/tokenizer.js` — heuristic token estimator for count endpoints.
+- `lib/body.js`, `lib/security.js` — request body parsing/limits and redaction/security helpers.
 - `lib/pool.js`, `lib/ratelimit.js`, `lib/warm.js`, `lib/watchdog.js` — token pool, pacing/rate limiting, pre-warm cache, liveness + re-login.
 - `lib/auth.js`, `lib/signup.js`, `lib/captcha.js`, `lib/mailbox.js` — login and experimental signup pipeline.
 - `lib/env.js`, `lib/metrics.js` — `.env` loading, in-memory metrics.
 - `scripts/` — CLI tools, tests, probes, benchmark.
-- `tutos/` — integration guides for coding agents (OpenCode, Claude Code, Cursor, Cline, Continue, Aider, Zed, etc.).
+- `tutos/` — integration guides for coding agents.
 
 ## Models & context
 
