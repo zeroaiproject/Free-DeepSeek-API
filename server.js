@@ -282,16 +282,32 @@ async function handleChat(req, res) {
         const upstream = await complete(token, { sessionId, challenge, prompt, thinking, onData: gate, timing });
 
         if (!started && !extractor.text && !extractor.reasoning) {
-          // upstream answered with a JSON document instead of SSE
+          // No content at all. Either a JSON error document came back instead of
+          // SSE, or DeepSeek silently rate limited us with an empty stream.
           let j = null;
           try {
             j = JSON.parse(jsonBody);
           } catch {}
-          lastError = j
-            ? new ApiError(j.code, j.msg, upstream.status)
-            : new ApiError('HTTP_' + upstream.status, (jsonBody || 'empty upstream').slice(0, 300), upstream.status);
-          if (isAuthError(lastError)) pool.penalize(token, 300_000);
-          continue;
+
+          if (j) {
+            lastError = new ApiError(j.code, j.msg, upstream.status);
+            if (isAuthError(lastError)) pool.penalize(token, 300_000);
+            continue;
+          }
+
+          if (upstream.status !== 200) {
+            lastError = new ApiError('HTTP_' + upstream.status, (jsonBody || 'empty upstream').slice(0, 300), upstream.status);
+            continue;
+          }
+
+          // Empty 200: retrying immediately just burns another request, so tell
+          // the caller instead of hammering the upstream.
+          lastError = new ApiError(
+            'EMPTY_ANSWER',
+            'upstream returned an empty answer (DeepSeek rate limit); retry in ~30s',
+            429
+          );
+          break;
         }
 
         pool.reward(token);
@@ -360,6 +376,16 @@ async function handleChat(req, res) {
       const extractor = makeExtractor();
       extractor.push(upstream.body);
       extractor.flush();
+
+      if (!extractor.text && !extractor.reasoning) {
+        lastError = new ApiError(
+          'EMPTY_ANSWER',
+          'upstream returned an empty answer (DeepSeek rate limit); retry in ~30s',
+          429
+        );
+        break;
+      }
+
       pool.reward(token);
 
       let calls = toolsActive ? extractToolCalls(extractor.text, allowedNames) : null;
