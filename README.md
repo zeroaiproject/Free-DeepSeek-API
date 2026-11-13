@@ -79,6 +79,52 @@ Wrong credentials return `PASSWORD_OR_USER_NAME_IS_WRONG`.
 > gate. The app client shape (`os: "android"` + app user-agent) is accepted and
 > returns a real `biz_code`, which is what `scripts/login.js` uses.
 
+**Option C — automated signup (experimental)**
+
+```bash
+CAPTCHA_PROVIDER=capsolver CAPSOLVER_KEY=... \
+node scripts/signup.js --email you@gmail.com --mailbox imap --persist
+```
+
+This drives the real web registration flow: it solves the guest proof-of-work,
+asks DeepSeek to send the 6-digit code, reads it from your mailbox, and
+registers the account. It prints the new `userToken` (and appends it to
+`tokens.txt` with `--persist`).
+
+The flow has four gates, and only three are cleared locally:
+
+| gate | status |
+| --- | --- |
+| guest PoW (`X-DS-Guest-PoW-Response`) | solved here with the shipped WASM, no token needed |
+| email domain | must not be disposable — gmail/outlook/yahoo/qq/163/proton are accepted, throwaway domains return `EMAIL_DOMAIN_NOT_SUPPORTED` |
+| captcha (`hcaptcha_token`, invisible widget) | **verified server-side**; needs a real solve (see below) |
+| mailbox code | read from IMAP, an HTTP endpoint, or a disposable inbox |
+
+Captcha providers (`CAPTCHA_PROVIDER` / `--captcha`):
+
+| provider | needs | notes |
+| --- | --- | --- |
+| `none` (default) | — | useful for tests; the code request fails with `RECAPTCHA_VERIFY_FAILED` |
+| `capsolver` | `CAPSOLVER_KEY` | paid solver |
+| `2captcha` | `TWOCAPTCHA_KEY` | paid solver |
+| `browser` | `playwright-core` + Chromium (`CHROME_PATH`) | drives the real signup page; the widget may solve itself on a clean residential IP, but a challenged IP gets an image puzzle and needs a human (`CAPTCHA_HEADFUL=1`) |
+
+Mailbox providers (`MAILBOX` / `--mailbox`): `imap` (`IMAP_HOST`, `IMAP_USER`,
+`IMAP_PASSWORD`, `IMAP_PORT`, `IMAP_TLS`, `IMAP_MAILBOX`), `http` (polls
+`MAILBOX_URL`), `mailtm` (disposable inbox — blocked by the domain gate, so
+only useful to observe the rejection).
+
+Smoke test (offline of captcha/mailbox, hits the live PoW + register gates):
+
+```bash
+node scripts/test-signup.js
+```
+
+> This cannot mint accounts for free from a datacenter IP: the invisible hCaptcha
+> escalates to image challenges there and DeepSeek rejects forged tokens. To run
+> it unattended you need a paid solver key or a residential/browser session that
+> the widget accepts.
+
 ---
 
 ## Configuration
@@ -108,6 +154,13 @@ process manager or `export`).
 | `DEEPSEEK_PASSWORD` | — | Account password, enables automatic re-login |
 | `DEEPSEEK_TOKEN_PERSIST` | — | `1` writes a re-login token back to `tokens.txt` |
 | `RELOGIN_BACKOFF_MS` | `600000` | Pause between re-login attempts after a failure |
+| `CAPTCHA_PROVIDER` | `none` | `capsolver`, `2captcha` or `browser` for automated signup |
+| `CAPSOLVER_KEY` / `TWOCAPTCHA_KEY` | — | API key for the chosen paid captcha solver |
+| `HCAPTCHA_SITEKEY` | *(DeepSeek's)* | Override the signup hCaptcha sitekey if it rotates |
+| `CHROME_PATH` | — | Chromium binary for the `browser` captcha provider |
+| `MAILBOX` | `mailtm` | Signup mailbox: `imap`, `http` or `mailtm` |
+| `MAILBOX_URL` | — | JSON endpoint polled by the `http` mailbox |
+| `IMAP_HOST` / `IMAP_PORT` / `IMAP_USER` / `IMAP_PASSWORD` | — | IMAP inbox used to read the verification code |
 | `DEBUG_BODY_DIR` | — | Dump each incoming request body there (debugging) |
 
 Multiple tokens are load-balanced round-robin. A token that returns
@@ -606,14 +659,19 @@ lib/ratelimit.js              token bucket + per-token upstream mutex
 lib/watchdog.js               liveness probe, triggers re-login on 40003
 lib/streamgate.js             content hold-back / tool-call detection while streaming
 lib/auth.js                   email+password login (also used for auto re-login)
+lib/signup.js                 automated signup (guest PoW + code request + register)
+lib/captcha.js                hCaptcha solver facade (capsolver / 2captcha / browser)
+lib/mailbox.js                verification-code readers (IMAP / HTTP poll / mail.tm)
+lib/warm.js                   pre-warm cache (challenges + reusable session)
 lib/sha3_wasm_bg.*.wasm       original PoW module
 scripts/login.js              email+password -> userToken (CLI wrapper)
+scripts/signup.js             automated signup -> userToken
 scripts/token-check.js        verify the tokens in tokens.txt are still alive
 scripts/pow-selftest.js       offline PoW vector test
 scripts/test-parsers.js       offline tool-call parser tests
 scripts/test-streamgate.js    offline streaming hold-back tests
+scripts/test-signup.js        signup gate smoke tests (guest PoW / 40300 / biz codes)
 scripts/test-tools.js         end-to-end tool-calling tests
-lib/warm.js                   pre-warm cache (challenges + reusable session)
 scripts/bench.js              TTFT / tokens-per-second benchmark
 scripts/raw.js                dump the raw upstream SSE stream
 scripts/replay.js             replay a captured request upstream

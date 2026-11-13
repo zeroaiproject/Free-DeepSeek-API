@@ -15,7 +15,9 @@
     "test": "node scripts/test-parsers.js",
     "test:tools": "node scripts/test-tools.js",
     "test:parsers": "node scripts/test-parsers.js",
-    "token:check": "node scripts/token-check.js"
+    "test:signup": "node scripts/test-signup.js",
+    "token:check": "node scripts/token-check.js",
+    "signup": "node scripts/signup.js"
   },
   "keywords": [
     "deepseek",
