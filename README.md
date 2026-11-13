@@ -334,12 +334,13 @@ lib/
   streamgate.js           Stream hold-back / tool-call marker detection
   tools.js                Tool emulation (prompt, JSON/DSML parsing, transcript)
   compat.js               Anthropic/Vertex format translation helpers
+  protocol.js             Unified protocol normalization/format engine helpers
   tokenizer.js            Heuristic token estimator (count endpoints)
   body.js                 Request body parsing (byte limits/timeouts)
   security.js             Redaction and basic security helpers
   pool.js                 Token pool, hot-reload, swap/re-login
-  ratelimit.js            Bucket + mutex + pacing/jitter/cooldown
-  warm.js                 Pre-warm challenges/sessions
+  ratelimit.js            Adaptive pacing/bucket + mutex + cooldown
+  warm.js                 Smart pre-warm (challenges/sessions reuse)
   watchdog.js             Liveness probe, triggers re-login
   auth.js / signup.js     Login and signup (experimental)
   captcha.js / mailbox.js Captcha solvers & verification-code readers
@@ -349,6 +350,15 @@ tutos/                    Integration guides (OpenCode, Cursor, Cline, Aider, et
 CHANGELOG.md              Project change history
 run.sh                    start/restart helper (pidfile)
 ```
+
+## 📊 Benchmark engine
+
+```bash
+node scripts/bench.js [runs] [short|long] [model] [--json]
+# BASE_URL=http://127.0.0.1:8787 BENCH_DELAY_MS=3000 node scripts/bench.js 10 short deepseek-chat
+```
+
+Reports TTFT, decode/wall throughput (tokens/s), end-to-end latency with percentiles (**p50/p90/p95/p99**), sustained request/token rates, and memory snapshots (client process + proxy health/metrics context when available). JSON output (`--json`) is suitable for automation/regression tracking.
 
 ---
 

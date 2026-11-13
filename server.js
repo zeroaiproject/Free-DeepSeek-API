@@ -470,11 +470,14 @@ async function handleChat(req, res, opts = {}) {
         // as a tool-call marker appears, so nothing leaks as text.
         const sg = new StreamGate({ toolsActive, holdBack: HOLD_BACK });
 
-        const write = (obj) => res.write('data: ' + JSON.stringify(obj) + '\n\n');
-        const emit = (ev) =>
-          write(
-            chunk(id, model, ev.kind === 'reasoning' ? { reasoning_content: ev.delta } : { content: ev.delta })
-          );
+        const SSE_PREFIX = 'data: ';
+        const SSE_SUFFIX = '\n\n';
+        const sseWrite = (obj) => { res.write(SSE_PREFIX); res.write(JSON.stringify(obj)); res.write(SSE_SUFFIX); };
+        const sendDelta = (delta) => sseWrite({ id, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta, finish_reason: null }] });
+        const emit = (ev) => {
+          if (!ev || !ev.delta) return;
+          sendDelta(ev.kind === 'reasoning' ? { reasoning_content: ev.delta } : { content: ev.delta });
+        };
 
         const open = () => {
           if (started) return;
@@ -495,23 +498,25 @@ async function handleChat(req, res, opts = {}) {
             'X-Ds-Prep-Ms': String(prepMs),
             'X-Ds-Upstream-Ttfb-Ms': String(upstreamTtfbMs),
           });
-          write(chunk(id, model, { role: 'assistant', content: '' }));
+          sseWrite({ id, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }] });
         };
 
         // Streams content up to the safe point.
         const pump = () => {
           const piece = sg.pump(extractor.text);
-          if (piece) emit({ kind: 'content', delta: piece });
+          if (piece) sendDelta({ content: piece });
         };
 
         const handleEvents = (events) => {
-          for (const ev of events) {
+          for (let i = 0; i < events.length; i++) {
+            const ev = events[i];
             if (ev.kind === 'reasoning') {
-              emit(ev);
+              sendDelta({ reasoning_content: ev.delta });
               continue;
             }
             if (sg.buffering) continue;
-            pump();
+            const piece = sg.pump(extractor.text);
+            if (piece) sendDelta({ content: piece });
           }
         };
 
@@ -570,6 +575,7 @@ async function handleChat(req, res, opts = {}) {
         }
 
         pool.reward(token);
+        limiter.record(token, { latencyMs: Date.now() - tAttempt, ok: true });
         limiter.reward(token);
         handleEvents(extractor.flush());
 
@@ -590,38 +596,33 @@ async function handleChat(req, res, opts = {}) {
           }
           if (!parallel) calls = calls.slice(0, 1);
           open();
-          if (extractor.reasoning) write(chunk(id, model, { reasoning_content: extractor.reasoning }));
+          if (extractor.reasoning) sendDelta({ reasoning_content: extractor.reasoning });
           const wire = toToolCalls(calls);
-          write(
-            chunk(
-              id,
-              model,
-              {
-                tool_calls: wire.map((c, i) => ({
-                  index: i,
-                  id: c.id,
-                  type: 'function',
-                  function: { name: c.function.name, arguments: c.function.arguments },
-                })),
-              }
-            )
-          );
+          sendDelta({
+            tool_calls: wire.map((c, i) => ({
+              index: i,
+              id: c.id,
+              type: 'function',
+              function: { name: c.function.name, arguments: c.function.arguments },
+            })),
+          });
           finish = 'tool_calls';
         } else {
           open();
-          if (extractor.reasoning) write(chunk(id, model, { reasoning_content: extractor.reasoning }));
+          if (extractor.reasoning) sendDelta({ reasoning_content: extractor.reasoning });
           // Emit whatever the hold-back kept, or the whole buffer when a
           // suspected tool call turned out to be ordinary prose.
           if (sg.buffering) {
             const rest = sg.drain(extractor.text);
-            if (rest) write(chunk(id, model, { content: rest }));
+            if (rest) sendDelta({ content: rest });
           } else {
-            flushHeld();
+            const piece = sg.finish(extractor.text);
+            if (piece) sendDelta({ content: piece });
           }
         }
 
-        write(chunk(id, model, {}, finish));
-        if (includeUsage) write(usageChunk(id, model, created, extractor.usage || 0));
+        sseWrite({ id, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta: {}, finish_reason: finish }] });
+        if (includeUsage) sseWrite({ id, object: 'chat.completion.chunk', created, model, choices: [], usage: { prompt_tokens: 0, completion_tokens: extractor.usage || 0, total_tokens: extractor.usage || 0 } });
         res.write('data: [DONE]\n\n');
         return res.end();
       }
@@ -661,6 +662,7 @@ async function handleChat(req, res, opts = {}) {
       extractor.flush();
 
       if (!extractor.text && !extractor.reasoning) {
+        limiter.record(token, { latencyMs: Date.now() - tAttempt, ok: false, throttled: true });
         limiter.cooldown(token);
         lastError = new ApiError(
           'EMPTY_ANSWER',
@@ -671,6 +673,7 @@ async function handleChat(req, res, opts = {}) {
       }
 
       pool.reward(token);
+      limiter.record(token, { latencyMs: Date.now() - tAttempt, ok: true });
       limiter.reward(token);
 
       let calls = toolsActive ? extractToolCalls(extractor.text, allowedNames) : null;
@@ -895,6 +898,7 @@ async function handleAnthropicMessages(req, res) {
           let j = null; try { j = JSON.parse(jsonBody); } catch {}
           if (j) { lastError = new ApiError(j.code, j.msg, upstream.status); if (isAuthError(lastError)) { pool.penalize(token, 300_000); await relogin(token); } continue; }
           if (upstream.status !== 200) { lastError = new ApiError('HTTP_' + upstream.status, (jsonBody || 'empty upstream').slice(0, 300), upstream.status); continue; }
+          limiter.record(token, { latencyMs: Date.now() - (timing && timing.tStart ? timing.tStart : Date.now()), ok: false, throttled: true });
           limiter.cooldown(token);
           lastError = new ApiError('EMPTY_ANSWER', 'upstream returned an empty answer (DeepSeek rate limit); retry in ~30s', 429);
           continue;
@@ -957,6 +961,7 @@ async function handleAnthropicMessages(req, res) {
       extractor.push(upstream.body);
       extractor.flush();
       if (!extractor.text && !extractor.reasoning) {
+        limiter.record(token, { ok: false, throttled: true });
         limiter.cooldown(token);
         lastError = new ApiError('EMPTY_ANSWER', 'upstream returned an empty answer (DeepSeek rate limit); retry in ~30s', 429);
         continue;
@@ -1089,6 +1094,7 @@ async function handleVertexGenerate(req, res, modelFromPath, stream) {
           let j = null; try { j = JSON.parse(jsonBody); } catch {}
           if (j) { lastError = new ApiError(j.code, j.msg, upstream.status); if (isAuthError(lastError)) { pool.penalize(token, 300_000); await relogin(token); } continue; }
           if (upstream.status !== 200) { lastError = new ApiError('HTTP_' + upstream.status, (jsonBody || 'empty upstream').slice(0, 300), upstream.status); continue; }
+          limiter.record(token, { latencyMs: Date.now() - (timing && timing.tStart ? timing.tStart : Date.now()), ok: false, throttled: true });
           limiter.cooldown(token);
           lastError = new ApiError('EMPTY_ANSWER', 'upstream returned an empty answer (DeepSeek rate limit); retry in ~30s', 429);
           continue;
@@ -1128,6 +1134,7 @@ async function handleVertexGenerate(req, res, modelFromPath, stream) {
       extractor.push(upstream.body);
       extractor.flush();
       if (!extractor.text && !extractor.reasoning) {
+        limiter.record(token, { ok: false, throttled: true });
         limiter.cooldown(token);
         lastError = new ApiError('EMPTY_ANSWER', 'upstream returned an empty answer (DeepSeek rate limit); retry in ~30s', 429);
         continue;

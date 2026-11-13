@@ -17,10 +17,10 @@ Guidance for coding agents working in this repository.
 - `lib/pow.js` + `lib/sha3_wasm_bg.*.wasm` — PoW solver (original WASM). **Do not replace semantics.**
 - `lib/stream.js`, `lib/streamgate.js` — SSE fragment assembly and stream-safe tool-call hold-back.
 - `lib/tools.js` — tool prompt builder, transcript shaping, JSON/DSML tool-call extraction.
-- `lib/compat.js` — Anthropic/Vertex format translation helpers.
+- `lib/compat.js`, `lib/protocol.js` — Anthropic/Vertex translation and unified protocol normalization/format helpers.
 - `lib/tokenizer.js` — heuristic token estimator for count endpoints.
 - `lib/body.js`, `lib/security.js` — request body parsing/limits and redaction/security helpers.
-- `lib/pool.js`, `lib/ratelimit.js`, `lib/warm.js`, `lib/watchdog.js` — token pool, pacing/rate limiting, pre-warm cache, liveness + re-login.
+- `lib/pool.js`, `lib/ratelimit.js`, `lib/warm.js`, `lib/watchdog.js` — token pool, adaptive pacing/rate limiting, smart pre-warm/session reuse, liveness + re-login.
 - `lib/auth.js`, `lib/signup.js`, `lib/captcha.js`, `lib/mailbox.js` — login and experimental signup pipeline.
 - `lib/env.js`, `lib/metrics.js` — `.env` loading, in-memory metrics.
 - `scripts/` — CLI tools, tests, probes, benchmark.

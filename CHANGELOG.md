@@ -19,7 +19,13 @@ The project has no formal release/tag cadence yet; entries are grouped by capabi
 - **Improved fallbacks and resilience**: transient upstream/network error classification with lighter penalties/retry-friendly handling, dropped stale prewarm challenges on transient failures, increased completion retry attempts, and clearer method/path fallback responses (`405/404/501`) for better client compatibility and maturity.
 - **Security hardening**: request body parsing now uses byte-counted buffers with configurable limits/timeouts (`BODY_LIMIT_BYTES`, `BODY_TIMEOUT_MS`), debug request dumps are redacted and opt-in, CORS is configurable (`CORS_ORIGIN`), non-loopback binds without `API_KEY` are refused by default (override: `ALLOW_INSECURE_EXPOSED=1`), and additional client/auth header handling added.
 - **Tool calling & tokenizer**: improved JSON/DSML extraction/normalization and instruction clarity, plus a refined dependency-free heuristic tokenizer for token-count endpoints.
-- **Modularization**: extracted `lib/body.js`, `lib/security.js`, `lib/compat.js`, and `lib/tokenizer.js`; docs/config/Docker updated for new behavior and layout.
+- **Performance & architecture**:
+  - **Streaming path optimizations** in OpenAI SSE handling (reduced intermediate allocations/object churn, chunked SSE writes).
+  - **Adaptive concurrency/pacing** in `lib/ratelimit.js` (EWMA latency/success/error-aware gap and cooldown tuning, richer stats).
+  - **Smarter session reuse** in `lib/warm.js` (pruning, selection, and reuse/caching of fresh sessions).
+  - **Unified protocol engine** foundation in `lib/protocol.js` (shared normalization/formatting/stream adapter helpers for OpenAI, Anthropic, Vertex).
+  - **Benchmark engine** improvements in `scripts/bench.js` (TTFT, decode/wall throughput, sustained rates, memory snapshots, p50/p90/p95/p99, JSON output).
+- **Modularization**: extracted `lib/body.js`, `lib/security.js`, `lib/compat.js`, `lib/tokenizer.js`, and `lib/protocol.js`; docs/config/Docker updated for new behavior and layout.
 
 ### Changed
 - Repo documentation standardized to **English** (README, tutorials, guides, and project docs) (`2d5af89`).
