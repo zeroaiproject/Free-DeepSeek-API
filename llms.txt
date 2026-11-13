@@ -3,7 +3,7 @@
 > OpenAI-, Anthropic-, and Vertex/Gemini-compatible proxy for `chat.deepseek.com` (DeepSeek web endpoint) with native PoW, streaming, emulated tool-calling, and zero npm runtime dependencies.
 
 - Repo: https://github.com/zeroaiproject/Free-DeepSeek-API
-- License: GLWTS
+- License: GPL-3.0-or-later
 - Runtime: Node.js >= 18, CommonJS, no npm runtime dependencies
 - Context advertised: **1M tokens** (`deepseek-chat`, `deepseek-reasoner`) — effective limit depends on upstream
 

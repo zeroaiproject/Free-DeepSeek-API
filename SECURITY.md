@@ -14,7 +14,7 @@ We’ll review and address valid reports as quickly as possible.
 
 ## Scope & notes
 
-- This proxy forwards traffic to a third-party service using user-provided tokens. **Tokens, passwords, and mailbox credentials are sensitive** — protect `.env`, `tokens.txt`, and `/health` (use `API_KEY` and avoid exposing the server publicly).
-- Persisted tokens are written atomically with restrictive permissions (`0600`); secrets files are gitignored. Do not disable these protections.
+- This proxy forwards traffic to a third-party service using user-provided tokens. **Tokens, passwords, and mailbox credentials are sensitive** — protect `.env`, `tokens.txt`, and `/health` (use `API_KEY`, restrict `CORS_ORIGIN`, and avoid exposing the server publicly).
+- Security defaults: non-loopback binds require `API_KEY` unless explicitly overridden (`ALLOW_INSECURE_EXPOSED=1`), request bodies are size/time-limited, debug dumps are opt-in and redacted, and persisted tokens are written atomically with restrictive permissions (`0600`). Do not disable these protections.
 - The automated signup flow interacts with anti-bot/captcha mechanisms and real accounts; use it only with accounts and infrastructure you are authorized to use, in compliance with applicable terms and laws.
-- Upstream (`chat.deepseek.com`) behavior, rate limits, and suspension policies are outside this project’s control.
+- Upstream (`chat.deepseek.com`) behavior, rate limits, and suspension policies are outside this project’s control. No warranty is provided.

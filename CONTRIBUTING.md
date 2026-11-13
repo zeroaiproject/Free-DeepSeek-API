@@ -34,6 +34,16 @@ npm run test:signup    # guest PoW / register payload / captcha gate checks
 - **Tool-call emulation** (`lib/tools.js`, `lib/streamgate.js`): keep JSON and DSML parsing/stream hold-back correct; add/extend parser cases when changing formats.
 - **Auth/rate/suspension handling**: distinguish token revocation from account suspension; avoid bursts that look automated.
 
+## Pull requests
+
+- Keep changes focused and explain *why* (protocol behavior, reliability, compatibility, security, docs).
+- Update docs/`CHANGELOG.md` when behavior, config, endpoints, or usage changes.
+- Run `node --check server.js lib/*.js scripts/*.js` and `npm run test:offline` before submitting.
+
 ## Reporting issues
 
-When reporting a bug, include: Node version, OS, how you run the server, relevant `/health` fields (with tokens masked — they already are), and sanitized logs/repro steps. Do **not** share real tokens, passwords, or mailbox credentials.
+When reporting a bug, include: Node version, OS, how you run the server, relevant `/health` fields (tokens are masked), and sanitized logs/repro steps. Do **not** share real tokens, passwords, or mailbox credentials.
+
+## License
+
+By contributing, you agree that your contributions will be licensed under the project's **GPL-3.0-or-later** license.

@@ -29,7 +29,7 @@ const VERSION = pkg.version || '0.0.0';
 const STARTED_AT = Date.now();
 
 const PORT = Number(process.env.PORT || 8787);
-const HOST = process.env.HOST || '0.0.0.0';
+const HOST = process.env.HOST || '127.0.0.1';
 const API_KEY = process.env.API_KEY || '';
 const DEFAULT_MODEL = process.env.DEFAULT_MODEL || 'deepseek-chat';
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';

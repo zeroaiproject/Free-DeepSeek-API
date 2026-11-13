@@ -9,7 +9,7 @@
 [![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](package.json)
 [![API](https://img.shields.io/badge/OpenAI-compatible-412991?logo=openai&logoColor=white)](#-api)
 [![Context](https://img.shields.io/badge/context-1M%20tokens-0ea5e9)](#-models)
-[![License](https://img.shields.io/badge/license-GLWTS-blueviolet)](LICENSE)
+[![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 
 <br/>
 
@@ -42,8 +42,8 @@
 | 🛠️ | **Emulated tool calling** | `tools`, `tool_choice`, `parallel_tool_calls`, tool-result round-trips — **JSON + DSML** parsing with stream hold-back to prevent leaks. |
 | 🧱 | **Extended context** | Advertised window up to **1M tokens** (effective limit depends on the upstream endpoint/account). |
 | 🔐 | **Native PoW** | Solves `DeepSeekHashV1` via the original WASM (`wasm_solve`), ~30–110 ms. |
-| 🔁 | **Resilience** | Round-robin token pool, hot-reload, rate limiting + jitter/gap/cooldown, one in-flight completion per token, pre-warming, watchdog, optional auto re-login. |
-| 📈 | **Observability** | `/health` (masked status + metrics), `/metrics` (Prometheus/JSON), `X-Request-Id`, `X-Ds-*` timing headers. |
+| 🔁 | **Resilience** | Round-robin token pool, hot-reload, adaptive pacing (jitter/gap/cooldown), one in-flight completion per token, smart pre-warming/session reuse, watchdog, optional auto re-login. |
+| 📈 | **Observability** | `/health` (masked status + metrics), `/metrics` (Prometheus/JSON), `X-Request-Id`, `X-Ds-*` timing headers, and benchmark tooling (TTFT/tokens/s/memory/percentiles). |
 | 🧩 | **Drop-in** | OpenAI, **Anthropic Messages**, and **Vertex/Gemini** compatible APIs for SDKs, curl, and agent integrations (OpenCode, Cursor, Continue, Cline, Aider, Zed, etc.). |
 
 > [!NOTE]
@@ -287,11 +287,11 @@ curl http://127.0.0.1:8787/v1beta/models/deepseek-chat:generateContent \
 
 Most variables are optional. `.env` is **auto-loaded** (without overriding existing vars). Secrets (`.env`, `tokens.txt`) are gitignored; tokens are persisted with mode `0600`.
 
-> **Security note:** binding to a non-loopback `HOST` without `API_KEY` is refused at startup unless `ALLOW_INSECURE_EXPOSED=1` is explicitly set. Debug dumps (if enabled) are redacted.
+> **Security note:** the server binds to `127.0.0.1` by default. Binding to a non-loopback `HOST` without `API_KEY` is refused at startup unless `ALLOW_INSECURE_EXPOSED=1` is explicitly set. Debug dumps (if enabled) are redacted.
 
 | Variable | Default | Purpose |
 |---|---:|---|
-| `PORT` / `HOST` | `8787` / `0.0.0.0` | Listen address (`127.0.0.1` recommended for local-only) |
+| `PORT` / `HOST` | `8787` / `127.0.0.1` | Listen address (`0.0.0.0` to expose; set `API_KEY` or override intentionally) |
 | `API_KEY` | — | Protect the proxy (`Authorization: Bearer` / `x-api-key`) |
 | `ALLOW_INSECURE_EXPOSED` | `0` | Allow non-loopback bind without `API_KEY` (unsafe override) |
 | `CORS_ORIGIN` | `*` | CORS allowed origin for browser clients |
@@ -319,7 +319,7 @@ Most variables are optional. `.env` is **auto-loaded** (without overriding exist
 - **Anti-suspension is not guaranteed**: pacing/jitter/gaps, session reuse, staggered pre-warm and watchdog reduce signals but cannot eliminate policy risk.
 
 > [!WARNING]
-> Keep volume low and human-like, prefer clean/residential egress when needed, and avoid sustained automated loops.
+> Keep volume low and human-like, prefer clean/residential egress when needed, and avoid sustained automated loops. Use only accounts, tokens, and infrastructure you are authorized to access.
 
 ---
 
@@ -381,8 +381,8 @@ node --check server.js lib/*.js scripts/*.js
 
 ---
 
-<div align="center">
+## License
 
-**[GLWTS](LICENSE)** · *Good luck with that shit. Use responsibly.*
+Licensed under the **[GNU General Public License v3.0 or later](LICENSE)** (GPL-3.0-or-later).
 
-</div>
+> This project interacts with third-party web endpoints and user-provided credentials/tokens. Use responsibly and in compliance with applicable laws and terms. No warranty is provided.

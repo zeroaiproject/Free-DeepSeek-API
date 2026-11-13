@@ -52,7 +52,7 @@ npm start
 node server.js
 ```
 
-Default: `http://127.0.0.1:8787`
+Default: `http://127.0.0.1:8787` (local-only by default). To expose on other interfaces set `HOST=0.0.0.0` and configure `API_KEY` (or `ALLOW_INSECURE_EXPOSED=1` for trusted local/container setups).
 
 **Available APIs:** OpenAI-compatible (`/v1/chat/completions`), Anthropic Messages (`/v1/messages`), Vertex/Gemini (`/v1beta/models/{model}:generateContent`, `:streamGenerateContent`).
 

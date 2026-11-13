@@ -56,6 +56,8 @@ node --check server.js lib/*.js scripts/*.js
 ## Key operational notes
 
 - `.env` is auto-loaded at startup; tokens hot-reload from `tokens.txt`.
+- Default bind is `127.0.0.1`; non-loopback binds require `API_KEY` unless `ALLOW_INSECURE_EXPOSED=1`.
 - `Accept-Encoding: identity` is intentional upstream (no decompression pipeline).
 - Solved PoW is single-use; unsolved challenges can be reused within validity.
 - There is no refresh token endpoint — only re-mint via login/register/oauth.
+- License: **GPL-3.0-or-later**. Keep docs (`README.md`, `tutos/`, `CHANGELOG.md`, `llms.txt`) in sync with behavior/config/endpoints.

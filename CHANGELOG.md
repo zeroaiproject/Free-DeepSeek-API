@@ -6,6 +6,11 @@ The project has no formal release/tag cadence yet; entries are grouped by capabi
 
 ## [Unreleased / current]
 
+### Changed
+- **License changed to GPL-3.0-or-later** (from GLWTS). Updated `LICENSE`, `package.json`, README, docs, and metadata.
+- **Documentation polished and consolidated**: README, integration tutorials, agent/repo docs, security/contributing notes, changelog, and machine-readable docs refined for clarity, consistency, and completeness.
+- **Security/defaults**: default bind changed to `127.0.0.1` (safer local default); non-loopback binds still require `API_KEY` unless explicitly overridden. Docker/config/docs updated accordingly.
+
 ### Added
 - **Anthropic Messages API compatibility**: `POST /v1/messages` (and `/messages`) with request/response translation (messages, `system`, text/tool_use/tool_result blocks, reasoning/thinking mapping), **streaming SSE** (`message_start`, `content_block_*`, `message_delta`, `message_stop`), non-stream responses, and tool mapping over the existing emulation layer (`e0e5f9d`).
 - **Vertex/Gemini compatibility**: `POST /v1beta/models/{model}:generateContent` and `:streamGenerateContent` (SSE, `alt=sse`), including Vertex-style publisher model paths, with `contents`/`parts`/`systemInstruction`/function call/response translation and `candidates`/`usageMetadata` responses (`e0e5f9d`).

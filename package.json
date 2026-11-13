@@ -40,5 +40,5 @@
     "streaming",
     "tool-calling"
   ],
-  "license": "GLWTS"
+  "license": "GPL-3.0-or-later"
 }
