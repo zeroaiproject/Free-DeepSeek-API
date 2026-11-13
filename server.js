@@ -16,7 +16,7 @@ const { RateLimiter } = require('./lib/ratelimit');
 const { Watchdog } = require('./lib/watchdog');
 const { makeExtractor } = require('./lib/stream');
 const { StreamGate } = require('./lib/streamgate');
-const { buildToolInstructions, extractToolCalls, buildTranscript, toolDefs } = require('./lib/tools');
+const { buildToolInstructions, extractToolCalls, buildTranscript, toolDefs, forcedTool } = require('./lib/tools');
 const { init: initPow } = require('./lib/pow');
 const { Metrics } = require('./lib/metrics');
 
@@ -585,6 +585,11 @@ async function handleChat(req, res) {
         }
 
         if (calls) {
+          const forced = forcedTool(toolChoice);
+          if (forced) {
+            const only = calls.filter((c) => c.name === forced);
+            if (only.length) calls = only;
+          }
           if (!parallel) calls = calls.slice(0, 1);
           open();
           if (extractor.reasoning) write(chunk(id, model, { reasoning_content: extractor.reasoning }));
@@ -671,7 +676,15 @@ async function handleChat(req, res) {
       limiter.reward(token);
 
       let calls = toolsActive ? extractToolCalls(extractor.text, allowedNames) : null;
-      if (calls && !parallel) calls = calls.slice(0, 1);
+      if (calls) {
+        // Honor forced tool choice when specified.
+        const forced = forcedTool(toolChoice);
+        if (forced) {
+          const only = calls.filter((c) => c.name === forced);
+          if (only.length) calls = only;
+        }
+        if (!parallel) calls = calls.slice(0, 1);
+      }
 
       const message = calls
         ? { role: 'assistant', content: null, tool_calls: toToolCalls(calls) }
@@ -832,12 +845,15 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === '/v1/models' && method === 'GET') {
-      const data = MODELS.map((m) => ({
-        ...m,
-        context_window: m.id.includes('reasoner') ? 128000 : 128000,
-        max_output_tokens: m.id.includes('reasoner') ? 32768 : 8192,
-        capabilities: { tools: true, streaming: true, reasoning: m.id.includes('reasoner') },
-      }));
+      const data = MODELS.map((m) => {
+        const reasoner = m.id.includes('reasoner');
+        return {
+          ...m,
+          context_window: 1_000_000,
+          max_output_tokens: reasoner ? 32768 : 8192,
+          capabilities: { tools: true, streaming: true, reasoning: reasoner, vision: false },
+        };
+      });
       return send(res, 200, { object: 'list', data });
     }
 

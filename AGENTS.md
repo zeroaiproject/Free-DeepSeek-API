@@ -21,6 +21,12 @@ Guidance for coding agents working in this repository.
 - `lib/auth.js`, `lib/signup.js`, `lib/captcha.js`, `lib/mailbox.js` — login and experimental signup pipeline.
 - `lib/env.js`, `lib/metrics.js` — `.env` loading, in-memory metrics.
 - `scripts/` — CLI tools, tests, probes, benchmark.
+- `tutos/` — integration guides for coding agents (OpenCode, Claude Code, Cursor, Cline, Continue, Aider, Zed, etc.).
+
+## Models & context
+
+- Exposed models: `deepseek-chat` (default) and `deepseek-reasoner` (thinking, `reasoning_content`).
+- Advertised context window: **1M tokens** (effective limit depends on upstream). Keep `server.js` `/v1/models`, README, and tutos consistent when changing this.
 
 ## Development rules
 
