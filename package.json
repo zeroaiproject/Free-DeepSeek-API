@@ -11,7 +11,10 @@
     "start": "node server.js",
     "test:pow": "node scripts/pow-selftest.js",
     "bench": "node scripts/bench.js",
-    "selftest": "node scripts/pow-selftest.js && node scripts/order-test.js seq"
+    "selftest": "node scripts/pow-selftest.js && node scripts/order-test.js seq",
+    "test": "node scripts/test-parsers.js",
+    "test:tools": "node scripts/test-tools.js",
+    "test:parsers": "node scripts/test-parsers.js"
   },
   "keywords": [
     "deepseek",

@@ -9,6 +9,7 @@ const { TokenPool } = require('./lib/pool');
 const { complete, ApiError } = require('./lib/deepseek');
 const { Warmer } = require('./lib/warm');
 const { makeExtractor } = require('./lib/stream');
+const { buildToolInstructions, extractToolCalls, buildTranscript, toolDefs } = require('./lib/tools');
 const { init: initPow } = require('./lib/pow');
 
 const PORT = Number(process.env.PORT || 8787);
@@ -75,26 +76,9 @@ function contentToText(content) {
   return '';
 }
 
-function messagesToPrompt(messages) {
-  if (!Array.isArray(messages) || messages.length === 0) throw new Error('messages is required');
-  if (messages.length === 1 && messages[0].role === 'user') return contentToText(messages[0].content);
-
-  const lines = messages.map((m) => {
-    const text = contentToText(m.content);
-    if (m.role === 'system') return `System: ${text}`;
-    if (m.role === 'assistant') return `Assistant: ${text}`;
-    return `User: ${text}`;
-  });
-  return lines.join('\n\n');
-}
-
 function isAuthError(e) {
   if (!(e instanceof ApiError)) return false;
-  return (
-    e.code === 40003 ||
-    e.code === 40002 ||
-    /INVALID_TOKEN|Missing Token|TOKEN/i.test(String(e.msg))
-  );
+  return e.code === 40003 || e.code === 40002 || /INVALID_TOKEN|Missing Token|TOKEN/i.test(String(e.msg));
 }
 
 function chunk(id, model, delta, finish = null) {
@@ -107,48 +91,110 @@ function chunk(id, model, delta, finish = null) {
   };
 }
 
+function usageChunk(id, model, created, tokens) {
+  return {
+    id,
+    object: 'chat.completion.chunk',
+    created,
+    model,
+    choices: [],
+    usage: { prompt_tokens: 0, completion_tokens: tokens, total_tokens: tokens },
+  };
+}
+
+function toToolCalls(calls) {
+  return calls.map((c) => ({
+    id: 'call_' + crypto.randomBytes(12).toString('hex'),
+    type: 'function',
+    function: { name: c.name, arguments: JSON.stringify(c.arguments ?? {}) },
+  }));
+}
+
 // Buffers the first line of the upstream body to distinguish an SSE stream
 // (starts with "event:"/"data:") from a plain JSON error document.
 function createStreamGate(onStream, onJson) {
   let pending = '';
   let decided = false;
-  return (chunk) => {
-    if (decided) return onStream(chunk);
-    pending += chunk;
+  return (chunkText) => {
+    if (decided) return onStream(chunkText);
+    pending += chunkText;
     const nl = pending.indexOf('\n');
-    if (nl === -1 && pending.length < 4096) return; // need one line to decide
+    if (nl === -1 && pending.length < 4096) return;
 
     const firstLine = (nl === -1 ? pending : pending.slice(0, nl)).trim();
     decided = true;
-    if (firstLine.startsWith('event:') || firstLine.startsWith('data:')) {
-      onStream(pending);
-      pending = '';
-    } else {
-      onJson(pending);
-      pending = '';
-    }
+    if (firstLine.startsWith('event:') || firstLine.startsWith('data:')) onStream(pending);
+    else onJson(pending);
+    pending = '';
   };
+}
+
+// First non-whitespace characters that start a tool call rather than prose.
+// DSML (DeepSeek's markup tool format) begins with '<' + U+FF5C.
+const TOOL_PREFIXES = ['{', '```', '<\uFF5C', '<|'];
+
+// 'tool' => buffer the whole answer, 'wait' => need more characters,
+// 'text' => a normal answer, stream it.
+function classifyPrefix(peek) {
+  for (const p of TOOL_PREFIXES) {
+    if (peek.startsWith(p)) return 'tool';
+    if (p.startsWith(peek)) return 'wait';
+  }
+  return 'text';
 }
 
 async function handleChat(req, res) {
   const body = await readBody(req);
+  if (process.env.DEBUG_BODY_DIR) {
+    try {
+      const fs = require('fs');
+      const p = require('path');
+      fs.writeFileSync(
+        p.join(process.env.DEBUG_BODY_DIR, `req-${Date.now()}.json`),
+        JSON.stringify(body, null, 2)
+      );
+    } catch {}
+  }
   const model = body.model || DEFAULT_MODEL;
   const stream = !!body.stream;
   const thinking = /reason/i.test(model) || body.reasoning === true;
 
+  const defs = toolDefs(Array.isArray(body.tools) ? body.tools : []);
+  const toolChoice = body.tool_choice;
+  const toolsActive = defs.length > 0 && toolChoice !== 'none';
+  const allowedNames = new Set(defs.map((d) => d.name));
+  const parallel = body.parallel_tool_calls !== false;
+
   let prompt;
   try {
-    prompt = messagesToPrompt(body.messages);
+    const transcript = buildTranscript(body.messages, contentToText);
+    prompt = toolsActive
+      ? `System: ${buildToolInstructions(body.tools, toolChoice)}\n\n${transcript}`
+      : transcript;
   } catch (e) {
     return err(res, 400, e.message);
   }
 
-  const attempts = Math.max(1, Math.min(pool.size || 1, 3));
+  // A single token is normal, so retries must not be capped by pool size:
+  // one upstream failure should not turn into an immediate 503.
+  const MAX_ATTEMPTS = 3;
+  const MAX_WAIT_MS = 2_000;
   let lastError = null;
 
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    const token = pool.pick();
-    if (!token) return err(res, 503, 'no DeepSeek token available', 'service_unavailable');
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    let token = pool.pick();
+
+    // Every token is cooling down (e.g. right after penalize() on the previous
+    // attempt). Wait briefly for the soonest one instead of failing the request.
+    if (!token) {
+      const wait = pool.nextAvailableMs();
+      if (!Number.isFinite(wait) || wait > MAX_WAIT_MS) {
+        return err(res, 503, 'no DeepSeek token available', 'service_unavailable');
+      }
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      token = pool.pick();
+      if (!token) return err(res, 503, 'no DeepSeek token available', 'service_unavailable');
+    }
 
     const id = 'chatcmpl-' + crypto.randomUUID().replace(/-/g, '');
     const created = Math.floor(Date.now() / 1000);
@@ -160,7 +206,7 @@ async function handleChat(req, res) {
       const [sessionId, challenge] = await Promise.all([warmer.session(token), warmer.challenge(token)]);
       const sessionMs = Date.now() - tSession;
 
-      // ---- streaming path: relay deltas as they arrive -------------------
+      // ---- streaming path ------------------------------------------------
       if (stream && !res.headersSent) {
         const extractor = makeExtractor();
         const timing = {};
@@ -168,13 +214,23 @@ async function handleChat(req, res) {
         let started = false;
         let jsonBody = '';
 
+        // With tools enabled the model may answer with a JSON tool call, which
+        // must not be streamed as text. Hold output until the first characters
+        // reveal which shape it is.
+        let mode = toolsActive ? 'peek' : 'stream';
+        let pending = [];
+
         const write = (obj) => res.write('data: ' + JSON.stringify(obj) + '\n\n');
+        const emit = (ev) =>
+          write(
+            chunk(id, model, ev.kind === 'reasoning' ? { reasoning_content: ev.delta } : { content: ev.delta })
+          );
+
         const open = () => {
           if (started) return;
           started = true;
           const challengeMs = timing.challengeMs || 0;
           const solveMs = timing.powMs || 0;
-          // session and challenge run concurrently; only the slower one counts.
           const prepMs = Math.max(sessionMs, challengeMs) + solveMs;
           const upstreamTtfbMs = Math.max(0, Date.now() - tAttempt - prepMs);
           res.writeHead(200, {
@@ -192,11 +248,31 @@ async function handleChat(req, res) {
           write(chunk(id, model, { role: 'assistant', content: '' }));
         };
 
-        const onStream = (chunkText) => {
-          open();
-          for (const ev of extractor.push(chunkText)) {
-            write(chunk(id, model, ev.kind === 'reasoning' ? { reasoning_content: ev.delta } : { content: ev.delta }));
+        const handleEvents = (events) => {
+          for (const ev of events) {
+            if (mode === 'stream') {
+              emit(ev);
+              continue;
+            }
+            if (mode === 'buffer') continue;
+            pending.push(ev);
+            if (ev.kind !== 'content') continue;
+            const peek = extractor.text.trimStart();
+            if (!peek) continue;
+            const kind = classifyPrefix(peek);
+            if (kind === 'wait') continue;
+            if (kind === 'tool') {
+              mode = 'buffer';
+            } else {
+              mode = 'stream';
+              for (const p of pending) emit(p);
+              pending = [];
+            }
           }
+        };
+
+        const onStream = (chunkText) => {
+          handleEvents(extractor.push(chunkText));
         };
         const onJson = (chunkText) => {
           jsonBody += chunkText;
@@ -205,43 +281,62 @@ async function handleChat(req, res) {
         const gate = createStreamGate(onStream, onJson);
         const upstream = await complete(token, { sessionId, challenge, prompt, thinking, onData: gate, timing });
 
-        if (started) {
-          pool.reward(token);
-          for (const ev of extractor.flush()) {
-            write(chunk(id, model, ev.kind === 'reasoning' ? { reasoning_content: ev.delta } : { content: ev.delta }));
-          }
-          write(chunk(id, model, {}, 'stop'));
-          if (includeUsage) {
-            write({
-              id,
-              object: 'chat.completion.chunk',
-              created,
-              model,
-              choices: [],
-              usage: {
-                prompt_tokens: 0,
-                completion_tokens: extractor.usage || 0,
-                total_tokens: extractor.usage || 0,
-              },
-            });
-          }
-          res.write('data: [DONE]\n\n');
-          return res.end();
+        if (!started && !extractor.text && !extractor.reasoning) {
+          // upstream answered with a JSON document instead of SSE
+          let j = null;
+          try {
+            j = JSON.parse(jsonBody);
+          } catch {}
+          lastError = j
+            ? new ApiError(j.code, j.msg, upstream.status)
+            : new ApiError('HTTP_' + upstream.status, (jsonBody || 'empty upstream').slice(0, 300), upstream.status);
+          if (isAuthError(lastError)) pool.penalize(token, 300_000);
+          continue;
         }
 
-        // upstream answered with a JSON document instead of SSE
-        let j = null;
-        try {
-          j = JSON.parse(jsonBody);
-        } catch {}
-        lastError = j
-          ? new ApiError(j.code, j.msg, upstream.status)
-          : new ApiError('HTTP_' + upstream.status, (jsonBody || 'empty upstream').slice(0, 300), upstream.status);
-        if (isAuthError(lastError)) pool.penalize(token, 300_000);
-        continue;
+        pool.reward(token);
+        handleEvents(extractor.flush());
+
+        let finish = 'stop';
+        let calls = null;
+
+        if (mode !== 'stream' && toolsActive) {
+          calls = extractToolCalls(extractor.text, allowedNames);
+        }
+
+        if (calls) {
+          if (!parallel) calls = calls.slice(0, 1);
+          open();
+          if (extractor.reasoning) write(chunk(id, model, { reasoning_content: extractor.reasoning }));
+          const wire = toToolCalls(calls);
+          write(
+            chunk(
+              id,
+              model,
+              {
+                tool_calls: wire.map((c, i) => ({
+                  index: i,
+                  id: c.id,
+                  type: 'function',
+                  function: { name: c.function.name, arguments: c.function.arguments },
+                })),
+              }
+            )
+          );
+          finish = 'tool_calls';
+        } else if (mode !== 'stream') {
+          open();
+          if (extractor.reasoning) write(chunk(id, model, { reasoning_content: extractor.reasoning }));
+          if (extractor.text) write(chunk(id, model, { content: extractor.text }));
+        }
+
+        write(chunk(id, model, {}, finish));
+        if (includeUsage) write(usageChunk(id, model, created, extractor.usage || 0));
+        res.write('data: [DONE]\n\n');
+        return res.end();
       }
 
-      // ---- non-streaming path -------------------------------------------
+      // ---- non-streaming path --------------------------------------------
       const upstream = await complete(token, { sessionId, challenge, prompt, thinking });
 
       if (upstream.status !== 200) {
@@ -250,8 +345,7 @@ async function handleChat(req, res) {
       }
 
       // A non-SSE error document can come back with HTTP 200 and code != 0.
-      const head = upstream.body.trimStart();
-      if (head.startsWith('{')) {
+      if (upstream.body.trimStart().startsWith('{')) {
         let j;
         try {
           j = JSON.parse(upstream.body);
@@ -268,6 +362,17 @@ async function handleChat(req, res) {
       extractor.flush();
       pool.reward(token);
 
+      let calls = toolsActive ? extractToolCalls(extractor.text, allowedNames) : null;
+      if (calls && !parallel) calls = calls.slice(0, 1);
+
+      const message = calls
+        ? { role: 'assistant', content: null, tool_calls: toToolCalls(calls) }
+        : {
+            role: 'assistant',
+            content: extractor.text,
+            ...(extractor.reasoning ? { reasoning_content: extractor.reasoning } : {}),
+          };
+
       return send(res, 200, {
         id,
         object: 'chat.completion',
@@ -276,26 +381,30 @@ async function handleChat(req, res) {
         choices: [
           {
             index: 0,
-            message: {
-              role: 'assistant',
-              content: extractor.text,
-              ...(extractor.reasoning ? { reasoning_content: extractor.reasoning } : {}),
-            },
-            finish_reason: 'stop',
+            message,
+            finish_reason: calls ? 'tool_calls' : 'stop',
           },
         ],
         usage: {
-          prompt_tokens: extractor.usage || 0,
+          prompt_tokens: 0,
           completion_tokens: extractor.usage || 0,
           total_tokens: extractor.usage || 0,
         },
       });
     } catch (e) {
       lastError = e;
+      // Headers already went out on the streaming path: the client has a partial
+      // stream, so retrying would corrupt it. Close it and stop.
+      if (res.headersSent) {
+        try {
+          res.write('data: [DONE]\n\n');
+        } catch {}
+        return res.end();
+      }
       if (isAuthError(e)) pool.penalize(token, 300_000);
       else if (e instanceof ApiError && (e.code === 40301 || /INVALID_POW/.test(String(e.msg)))) {
         warmer.dropChallenges(token);
-      } else pool.penalize(token, 5_000);
+      } else pool.penalize(token, 1_200);
     }
   }
 

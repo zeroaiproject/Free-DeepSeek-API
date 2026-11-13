@@ -96,10 +96,12 @@ process manager or `export`).
 | `DEEPSEEK_TOKENS_FILE` | `./tokens.txt` | Extra token file |
 | `WARM_POOL` | `3` | Pre-fetched PoW challenges kept per token (`0` disables) |
 | `WARM_SESSION_USES` | `100` | Reuse a session this many times before rotating |
+| `DEBUG_BODY_DIR` | — | Dump each incoming request body there (debugging) |
 
 Multiple tokens are load-balanced round-robin. A token that returns
 `INVALID_TOKEN` is benched with exponential backoff and the request is retried
-on the next token (up to 3 attempts).
+on the next token. When every token is cooling down the request waits up to 2 s
+for the soonest one instead of failing immediately.
 
 ---
 
@@ -135,6 +137,152 @@ data: [DONE]
 
 Deltas are relayed as they arrive from DeepSeek — the proxy does not buffer the
 whole answer.
+
+---
+
+## Tool calling
+
+The web endpoint has **no native function calling**, so the proxy emulates it:
+the tool JSON Schemas are injected as a leading `System:` block, the model is
+asked to answer with a single JSON object, and the reply is parsed back into
+OpenAI `tool_calls`. The whole `tools` / `tool_choice` / `parallel_tool_calls`
+surface works, including the tool-result round trip.
+
+```bash
+curl http://127.0.0.1:8787/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "deepseek-chat",
+    "messages": [{"role":"user","content":"Quel temps fait-il à Paris ?"}],
+    "tools": [{
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Current weather for a city",
+        "parameters": {
+          "type": "object",
+          "properties": {"city": {"type": "string"}},
+          "required": ["city"]
+        }
+      }
+    }]
+  }'
+```
+
+```json
+{
+  "choices": [{
+    "finish_reason": "tool_calls",
+    "message": {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [{
+        "id": "call_…",
+        "type": "function",
+        "function": { "name": "get_weather", "arguments": "{\"city\":\"Paris\"}" }
+      }]
+    }
+  }]
+}
+```
+
+Send the result back as a `role: "tool"` message and the model answers in plain
+text.
+
+| Field | Behaviour |
+| --- | --- |
+| `tool_choice: "auto"` / omitted | model decides |
+| `tool_choice: "none"` | tools are dropped, plain answer |
+| `tool_choice: "required"` | at least one call is forced |
+| `tool_choice: {"type":"function","function":{"name":"X"}}` | that tool is forced |
+| `parallel_tool_calls: false` | extra calls are collapsed to the first one |
+
+### Two output formats are accepted
+
+With a small tool set the model follows the JSON instruction. With a large one
+(OpenCode sends 13 tools and a 37 kB system prompt) it sometimes falls back to
+its own markup, **DSML**:
+
+```
+<||DSML|| calls>
+<||DSML|| invoke name="read">
+<||DSML|| parameter name="path" string="true">sample.txt</||DSML|| parameter>
+</||DSML|| invoke>
+</||DSML|| calls>
+```
+
+Both are parsed, so tool calls never leak into `content`. The separator is
+U+FF5C U+FF5C (fullwidth bars), not ASCII pipes.
+
+### Streaming with tools
+
+A streamed tool call must not be sent as text. The proxy holds the first
+characters until they reveal the shape: `{`, ```` ``` ````, `<｜` or `<|` means a
+tool call (the rest is buffered and converted), anything else means prose and is
+streamed normally with no added latency. Only the initial bytes are delayed.
+
+### Tests
+
+```bash
+node scripts/test-parsers.js   # 11 parser cases, offline, no token
+node scripts/test-tools.js     # 8 end-to-end cases against the running proxy
+```
+
+---
+
+## Using it from OpenCode
+
+Add the proxy as a provider in `~/.config/opencode/opencode.jsonc`:
+
+```jsonc
+{
+  "providers": {
+    "freedeepseek": {
+      "name": "Free DeepSeek API",
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": {
+        "baseURL": "http://127.0.0.1:8787/v1",
+        "apiKey": "public"
+      },
+      "compatibility": { "reasoningField": "reasoning_content" },
+      "models": {
+        "deepseek-chat": {
+          "name": "DeepSeek Chat (Free)",
+          "limit": { "context": 128000, "output": 8192 },
+          "cost": { "input": 0, "output": 0 },
+          "capabilities": {
+            "tools": true,
+            "input": ["text"],
+            "output": ["text"],
+            "reasoning": { "supported": false }
+          }
+        },
+        "deepseek-reasoner": {
+          "name": "DeepSeek Reasoner (Free)",
+          "limit": { "context": 128000, "output": 32768 },
+          "cost": { "input": 0, "output": 0 },
+          "capabilities": {
+            "tools": true,
+            "input": ["text"],
+            "output": ["text"],
+            "reasoning": { "supported": true, "toggle": false }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Then:
+
+```bash
+opencode models | grep freedeepseek
+opencode run --model freedeepseek/deepseek-chat --auto "Read sample.txt and count its lines."
+```
+
+The proxy needs no API key, but OpenCode's OpenAI-compatible client requires a
+non-empty one, hence `"apiKey": "public"`.
 
 ---
 
@@ -287,13 +435,18 @@ server.js                     HTTP server, OpenAI compatibility layer
 lib/deepseek.js               chat.deepseek.com client (challenge, session, completion)
 lib/pow.js                    DeepSeekHash WASM wrapper
 lib/stream.js                 SSE fragment assembler
+lib/tools.js                  tool-call emulation, JSON + DSML parsers
 lib/pool.js                   round-robin token pool with cooldown
 lib/sha3_wasm_bg.*.wasm       original PoW module
 scripts/login.js              email+password -> userToken
 scripts/pow-selftest.js       offline PoW vector test
+scripts/test-parsers.js       offline tool-call parser tests
+scripts/test-tools.js         end-to-end tool-calling tests
 lib/warm.js                   pre-warm cache (challenges + reusable session)
 scripts/bench.js              TTFT / tokens-per-second benchmark
 scripts/raw.js                dump the raw upstream SSE stream
+scripts/replay.js             replay a captured request upstream
+scripts/dump-tool-format.js   inspect the tool-call format the model picks
 scripts/order-test.js         session vs PoW ordering check
 scripts/reuse-test.js         PoW/session reuse semantics
 run.sh                        start/restart with a pidfile
