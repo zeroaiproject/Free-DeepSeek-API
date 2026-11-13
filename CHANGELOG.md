@@ -10,7 +10,8 @@ The project has no formal release/tag cadence yet; entries are grouped by capabi
 - **Anthropic Messages API compatibility**: `POST /v1/messages` (and `/messages`) with request/response translation (messages, `system`, text/tool_use/tool_result blocks, reasoning/thinking mapping), **streaming SSE** (`message_start`, `content_block_*`, `message_delta`, `message_stop`), non-stream responses, and tool mapping over the existing emulation layer (`e0e5f9d`).
 - **Vertex/Gemini compatibility**: `POST /v1beta/models/{model}:generateContent` and `:streamGenerateContent` (SSE, `alt=sse`), including Vertex-style publisher model paths, with `contents`/`parts`/`systemInstruction`/function call/response translation and `candidates`/`usageMetadata` responses (`e0e5f9d`).
 - **`lib/compat.js`** format translators for Anthropic and Vertex/Gemini.
-- **Additional endpoints/handlers**: `/version`, `/livez`/`/healthz`, `/readyz`, `/openai/v1` aliases, `GET /v1/models/{id}`, legacy `POST /v1/completions` shim (mapped to chat), token-count stubs (`/v1/messages/count_tokens`, Vertex `:countTokens`), and explicit `501` handlers for unsupported OpenAI endpoints (embeddings/images/audio/responses/etc.) for graceful client fallback.
+- **Additional endpoints/handlers**: `/version`, `/livez`/`/healthz`, `/readyz`, `/openai/v1` aliases, `GET /v1/models/{id}`, legacy `POST /v1/completions` shim (mapped to chat), token-count endpoints (`/v1/messages/count_tokens`, Vertex `:countTokens`), and explicit `501` handlers for unsupported OpenAI endpoints (embeddings/images/audio/responses/etc.) for graceful client fallback.
+- **`lib/tokenizer.js`**: dependency-free heuristic token estimator (better than chars/4) for count endpoints and internal estimates.
 - Documentation updates for multi-API support (README, `llms.txt`, `AGENTS.md`, tutorials index, landing/health endpoint info).
 
 ### Changed

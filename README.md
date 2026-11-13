@@ -191,10 +191,10 @@ This includes handling snapshot/append/replace-style updates from the web protoc
 | `POST` | `/v1/chat/completions` | OpenAI-compatible chat completions (stream/non-stream), `tools` |
 | `POST` | `/v1/completions` | Legacy completions shim (mapped to chat) |
 | `POST` | `/v1/messages` | Anthropic Messages API compatible (stream/non-stream), tools |
-| `POST` | `/v1/messages/count_tokens` | Anthropic token-count stub (best-effort estimate) |
+| `POST` | `/v1/messages/count_tokens` | Anthropic token-count (heuristic estimate, no external tokenizer) |
 | `POST` | `/v1beta/models/{model}:generateContent` | Vertex/Gemini `generateContent` compatible |
 | `POST` | `/v1beta/models/{model}:streamGenerateContent` | Vertex/Gemini `streamGenerateContent` compatible (SSE) |
-| `POST` | `/v1beta/models/{model}:countTokens` | Vertex token-count stub (best-effort estimate) |
+| `POST` | `/v1beta/models/{model}:countTokens` | Vertex token-count (heuristic estimate, no external tokenizer) |
 | `POST` | `/v1/embeddings`, `/v1/images/*`, `/v1/audio/*`, ... | Explicit `501 not supported` responses (graceful fallback) |
 
 ### 🧱 Models

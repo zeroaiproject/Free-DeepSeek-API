@@ -20,6 +20,7 @@ const { buildToolInstructions, extractToolCalls, buildTranscript, toolDefs, forc
 const { init: initPow } = require('./lib/pow');
 const { Metrics } = require('./lib/metrics');
 const compat = require('./lib/compat');
+const { estimateTokens } = require('./lib/tokenizer');
 
 const pkg = (() => { try { return require('./package.json'); } catch { return {}; } })();
 const VERSION = pkg.version || '0.0.0';
@@ -1351,11 +1352,15 @@ const server = http.createServer(async (req, res) => {
     if ((url.pathname === '/v1/messages' || url.pathname === '/messages') && method === 'POST') {
       return await handleAnthropicMessages(req, res);
     }
-    // Anthropic token count stub (best-effort approximation)
+    // Anthropic token count (heuristic estimator)
     if ((url.pathname === '/v1/messages/count_tokens' || url.pathname === '/messages/count_tokens') && method === 'POST') {
       let body; try { body = await readBody(req); } catch { body = {}; }
-      const text = JSON.stringify(body?.messages || body || '').length;
-      return send(res, 200, { input_tokens: Math.max(1, Math.ceil(text / 4)) });
+      let total = 0;
+      if (body?.system) total += estimateTokens(body.system);
+      if (Array.isArray(body?.tools)) total += Math.ceil(estimateTokens(JSON.stringify(body.tools)) * 0.9);
+      if (Array.isArray(body?.messages)) total += estimateTokens(body.messages);
+      else total += estimateTokens(body);
+      return send(res, 200, { input_tokens: Math.max(1, Math.ceil(total)) });
     }
 
     // Google Vertex / Gemini API compatibility
@@ -1367,8 +1372,12 @@ const server = http.createServer(async (req, res) => {
       const action = vertexMatch[2];
       if (action === 'countTokens') {
         let body; try { body = await readBody(req); } catch { body = {}; }
-        const text = JSON.stringify(body?.contents || body || '').length;
-        return send(res, 200, { totalTokens: Math.max(1, Math.ceil(text / 4)) });
+        let total = 0;
+        if (body?.systemInstruction) total += estimateTokens(body.systemInstruction);
+        if (Array.isArray(body?.contents)) total += estimateTokens(body.contents);
+        if (Array.isArray(body?.tools)) total += Math.ceil(estimateTokens(JSON.stringify(body.tools)) * 0.9);
+        if (!total) total = estimateTokens(body);
+        return send(res, 200, { totalTokens: Math.max(1, Math.ceil(total)) });
       }
       const stream = action === 'streamGenerateContent' || url.searchParams.get('alt') === 'sse';
       return await handleVertexGenerate(req, res, modelFromPath, stream);
