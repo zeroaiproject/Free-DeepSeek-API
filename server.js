@@ -133,6 +133,10 @@ function send(res, status, obj, extraHeaders = {}) {
   res.end(body);
 }
 
+function requestId() {
+  try { return crypto.randomUUID(); } catch { return crypto.randomBytes(16).toString('hex'); }
+}
+
 function sendHtml(res, status, html) {
   res.writeHead(status, withSecurityHeaders({
     'Content-Type': 'text/html; charset=utf-8',
@@ -338,8 +342,15 @@ async function handleChat(req, res) {
     return err(res, 400, 'invalid JSON body', 'invalid_request_error');
   }
 
-  if (!body || !Array.isArray(body.messages) || body.messages.length === 0) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return err(res, 400, 'request body must be a JSON object', 'invalid_request_error');
+  }
+  if (!Array.isArray(body.messages) || body.messages.length === 0) {
     return err(res, 400, '`messages` must be a non-empty array', 'invalid_request_error', 'invalid_messages');
+  }
+  const badMsg = body.messages.find((m) => !m || typeof m !== 'object' || Array.isArray(m) || !m.role);
+  if (badMsg !== undefined) {
+    return err(res, 400, 'each message must be an object with a `role`', 'invalid_request_error', 'invalid_messages');
   }
 
   if (process.env.DEBUG_BODY_DIR) {
@@ -717,6 +728,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   const method = req.method || 'GET';
+  const rid = requestId();
+  res.setHeader('X-Request-Id', rid);
+
   const t0 = Date.now();
   let loggedStatus = 200;
   const origWriteHead = res.writeHead.bind(res);
@@ -724,7 +738,7 @@ const server = http.createServer(async (req, res) => {
 
   const done = () => {
     if (process.env.LOG_REQUESTS === '1') {
-      console.log(`[http] ${method} ${url.pathname} ${loggedStatus} ${Date.now() - t0}ms`);
+      console.log(`[http] ${rid.slice(0, 8)} ${method} ${url.pathname} ${loggedStatus} ${Date.now() - t0}ms`);
     }
   };
   res.on('finish', done);

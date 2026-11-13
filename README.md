@@ -8,7 +8,7 @@
 [![Node](https://img.shields.io/badge/node-%E2%89%A518-339933?logo=node.js&logoColor=white)](package.json)
 [![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](package.json)
 [![API](https://img.shields.io/badge/API-OpenAI%20compatible-412991?logo=openai&logoColor=white)](#endpoints)
-[![License](https://img.shields.io/badge/license-WTFPL-blue)](LICENSE)
+[![License](https://img.shields.io/badge/license-GLWTS-blueviolet)](LICENSE)
 
 <br/>
 
@@ -444,6 +444,6 @@ docker compose up -d --build
 
 <div align="center">
 
-**[WTFPL](LICENSE)** · *Use responsibly.*
+**[GLWTS](LICENSE)** · *Good luck with that shit. Use responsibly.*
 
 </div>
