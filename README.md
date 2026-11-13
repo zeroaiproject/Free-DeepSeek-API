@@ -2,13 +2,13 @@
 
 # Free DeepSeek API
 
-**Proxy OpenAI-compatible pour `chat.deepseek.com`**  
-*Zéro dépendance npm · Node.js 18+ · PoW natif (WASM) · Streaming · Tool-calling émulé · Pool de tokens*
+**OpenAI-compatible proxy for `chat.deepseek.com`**  
+*Zero npm dependencies · Node.js 18+ · Native PoW (WASM) · Streaming · Emulated tool calling · Token pool*
 
 [![Node](https://img.shields.io/badge/node-%E2%89%A518-339933?logo=node.js&logoColor=white)](package.json)
 [![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](package.json)
 [![API](https://img.shields.io/badge/OpenAI-compatible-412991?logo=openai&logoColor=white)](#-api)
-[![Context](https://img.shields.io/badge/context-1M%20tokens-0ea5e9)](#-mod%C3%A8les)
+[![Context](https://img.shields.io/badge/context-1M%20tokens-0ea5e9)](#-models)
 [![License](https://img.shields.io/badge/license-GLWTS-blueviolet)](LICENSE)
 
 <br/>
@@ -16,16 +16,16 @@
 ```text
 ┌──────────────┐      OpenAI /v1/chat/completions      ┌──────────────────────┐      PoW + Bearer       ┌───────────────────┐
 │  App / Agent │  ───────────────────────────────────▶  │  Free DeepSeek API  │  ────────────────────▶  │ chat.deepseek.com │
-│  (SDK, IDE)  │  ◀────────── SSE / JSON ─────────────  │  (ce proxy)         │  ◀───── SSE/JSON ─────  │   (web endpoint)  │
+│  (SDK, IDE)  │  ◀────────── SSE / JSON ─────────────  │  (this proxy)       │  ◀───── SSE/JSON ─────  │   (web endpoint)  │
 └──────────────┘                                        └──────────────────────┘                         └───────────────────┘
 ```
 
 <p>
-  <a href="#-d%C3%A9marrage-rapide"><b>Démarrage rapide</b></a> ·
-  <a href="#-comment-%C3%A7a-marche"><b>Comment ça marche</b></a> ·
+  <a href="#-quick-start"><b>Quick start</b></a> ·
+  <a href="#-how-it-works"><b>How it works</b></a> ·
   <a href="#-api"><b>API</b></a> ·
   <a href="#-tool-calling"><b>Tool calling</b></a> ·
-  <a href="tutos/README.md"><b>Tutoriels agents</b></a> ·
+  <a href="tutos/README.md"><b>Agent tutorials</b></a> ·
   <a href="#%EF%B8%8F-configuration"><b>Configuration</b></a>
 </p>
 
@@ -33,32 +33,32 @@
 
 ---
 
-## ✨ Points forts
+## ✨ Highlights
 
-| | Fonctionnalité | Détail |
+| | Feature | Details |
 |:--:|---|---|
-| ⚡ | **Streaming réel** | Relais SSE DeepSeek → `chat.completion.chunk` OpenAI (débits progressifs, pas de buffer global). |
-| 🧠 | **Raisonnement** | `deepseek-reasoner` (thinking) → `reasoning_content` en stream et non-stream. |
-| 🛠️ | **Tool calling émulé** | `tools`, `tool_choice`, `parallel_tool_calls`, aller-retour résultats — parsing **JSON + DSML**, hold-back anti-fuite en streaming. |
-| 🧱 | **Contexte étendu** | Fenêtre annoncée jusqu’à **1M tokens** (limite effective selon l’endpoint/compte amont). |
-| 🔐 | **PoW natif** | Résolution `DeepSeekHashV1` via le WASM original (`wasm_solve`), ~30–110 ms. |
-| 🔁 | **Résilience** | Pool round-robin, hot-reload tokens, rate-limit + jitter/gap/cooldown, mutex par token, pré-chauffage, watchdog, re-login auto (optionnel). |
-| 📈 | **Observabilité** | `/health` (état masqué + métriques), `/metrics` Prometheus/JSON, `X-Request-Id`, headers de timing `X-Ds-*`. |
-| 🧩 | **Drop-in** | SDK OpenAI, curl, et intégrations agents (OpenCode, Cursor, Continue, Cline, Aider, Zed, etc.). |
+| ⚡ | **True streaming** | Relays DeepSeek SSE as OpenAI `chat.completion.chunk` deltas (no global buffering). |
+| 🧠 | **Reasoning** | `deepseek-reasoner` (thinking) → `reasoning_content` in stream and non-stream responses. |
+| 🛠️ | **Emulated tool calling** | `tools`, `tool_choice`, `parallel_tool_calls`, tool-result round-trips — **JSON + DSML** parsing with stream hold-back to prevent leaks. |
+| 🧱 | **Extended context** | Advertised window up to **1M tokens** (effective limit depends on the upstream endpoint/account). |
+| 🔐 | **Native PoW** | Solves `DeepSeekHashV1` via the original WASM (`wasm_solve`), ~30–110 ms. |
+| 🔁 | **Resilience** | Round-robin token pool, hot-reload, rate limiting + jitter/gap/cooldown, one in-flight completion per token, pre-warming, watchdog, optional auto re-login. |
+| 📈 | **Observability** | `/health` (masked status + metrics), `/metrics` (Prometheus/JSON), `X-Request-Id`, `X-Ds-*` timing headers. |
+| 🧩 | **Drop-in** | OpenAI SDKs, curl, and agent integrations (OpenCode, Cursor, Continue, Cline, Aider, Zed, etc.). |
 
 > [!NOTE]
-> Le proxy utilise l’endpoint **web** `chat.deepseek.com` avec des `userToken`. Gardez un débit modéré et conforme aux politiques DeepSeek : le trafic automatisé peut entraîner des limitations ou suspensions de compte.
+> The proxy uses the **web** endpoint `chat.deepseek.com` with `userToken`s. Keep traffic moderate and compliant with DeepSeek policies: automated usage may lead to rate limits or account suspension.
 
 ---
 
-## 🚀 Démarrage rapide
+## 🚀 Quick start
 
 ```bash
 git clone https://github.com/zeroaiproject/Free-DeepSeek-API.git
 cd free-deepseek-api
-cp .env.example .env                  # optionnel (auto-chargé)
+cp .env.example .env                  # optional (auto-loaded)
 echo "$DEEPSEEK_USER_TOKEN" > tokens.txt
-./run.sh                              # ou: npm start | docker compose up -d
+./run.sh                              # or: npm start | docker compose up -d
 ```
 
 ```bash
@@ -66,49 +66,49 @@ curl http://127.0.0.1:8787/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{
     "model": "deepseek-chat",
-    "messages": [{"role": "user", "content": "Dis bonjour en une phrase."}]
+    "messages": [{"role": "user", "content": "Say hello in one sentence."}]
   }'
 ```
 
 <details>
-<summary><b>Streaming, santé, modèles</b></summary>
+<summary><b>Streaming, health, models</b></summary>
 
 ```bash
 # streaming SSE
 curl -N http://127.0.0.1:8787/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{"model":"deepseek-chat","stream":true,"messages":[{"role":"user","content":"Compte de 1 à 5."}]}'
+  -d '{"model":"deepseek-chat","stream":true,"messages":[{"role":"user","content":"Count from 1 to 5."}]}'
 
-# santé + métriques (tokens masqués)
+# health + metrics (masked tokens)
 curl http://127.0.0.1:8787/health
 
-# modèles & capacités
+# models & capabilities
 curl http://127.0.0.1:8787/v1/models
 ```
 </details>
 
 ---
 
-## 🔑 Obtenir un token
+## 🔑 Getting a token
 
-Le proxy requiert un **`userToken`** (stocké par la webapp DeepSeek après connexion).
+The proxy requires a **`userToken`** (stored by the DeepSeek web app after login).
 
-| Méthode | Commande / action | Notes |
+| Method | Command / action | Notes |
 |---|---|---|
-| **Navigateur** | `localStorage.getItem('userToken')` sur https://chat.deepseek.com | Coller tel quel (base64, ne pas URL-encoder) dans `tokens.txt` (1 par ligne). |
-| **Email + mot de passe** | `node scripts/login.js email motdepasse` | Fonctionne si le compte a un mot de passe. |
-| **Signup (expérimental)** | `node scripts/signup.js --email ... --mailbox imap --captcha ...` | PoW invité automatisé ; **captcha hCaptcha vérifié serveur** + boîte mail requises. |
+| **Browser** | `localStorage.getItem('userToken')` at https://chat.deepseek.com | Paste as-is (base64, do not URL-encode) into `tokens.txt` (one per line). |
+| **Email + password** | `node scripts/login.js email password` | Works if the account has a password. |
+| **Signup (experimental)** | `node scripts/signup.js --email ... --mailbox imap --captcha ...` | Guest PoW automated; **server-verified hCaptcha** + accessible mailbox required. |
 
-> Comptes Google sans mot de passe : définissez-en un via « mot de passe oublié » (étape manuelle) pour activer la re-connexion auto (`DEEPSEEK_EMAIL/PASSWORD`). Détails et dépannage : [tutos/SETUP.md](tutos/SETUP.md).
+> Google accounts without a password: set one via "forgot password" (one-time manual step) to enable automatic re-login (`DEEPSEEK_EMAIL/PASSWORD`). Details and troubleshooting: [tutos/SETUP.md](tutos/SETUP.md).
 
 ---
 
-## 🔬 Comment ça marche
+## 🔬 How it works
 
-Le proxy reproduit le flux du client web `chat.deepseek.com` et l’expose comme une API OpenAI-compatible. À haut niveau : **auth bearer (`userToken`) → PoW par requête → session de chat → complétion SSE → traduction OpenAI**.
+The proxy reproduces the `chat.deepseek.com` web flow and exposes it as an OpenAI-compatible API. At a high level: **bearer auth (`userToken`) → per-request PoW → chat session → SSE completion → OpenAI translation**.
 
 ```text
-Client (SDK/agent)                     Proxy local                         DeepSeek web
+Client (SDK/agent)                     Local proxy                         DeepSeek web
       │                                     │                                   │
       │  POST /v1/chat/completions          │                                   │
       ├────────────────────────────────────▶│  create_pow_challenge             │
@@ -119,63 +119,63 @@ Client (SDK/agent)                     Proxy local                         DeepS
       │                                     ├──────────────────────────────────▶│
       │                                     │  POST /chat/completion (SSE)      │
       │                                     ├──────────────────────────────────▶│
-      │  SSE chunks / JSON OpenAI           │◀──── fragments / patches ─────────┤
+      │  SSE chunks / OpenAI JSON           │◀──── fragments / patches ─────────┤
       │◀────────────────────────────────────│  assemble + map (THINK/tools)     │
 ```
 
-### 1) Preuve de travail (PoW)
-Chaque complétion nécessite un header `X-Ds-Pow-Response` :
-1. **Challenge** — `POST /api/v0/chat/create_pow_challenge` avec `target_path` → `algorithm, challenge, salt, signature, difficulty, expire_at, target_path`.
-2. **Résolution** — trouver `answer ∈ [0, difficulty]` tel que `DeepSeekHash(salt_expireAt_answer) == challenge`.
-   - Algorithme Keccak custom embarqué dans `lib/sha3_wasm_bg.7b9ca65ddd.wasm` (exécuté tel quel, **pas** SHA-256/SHA3 standard).
-3. **Preuve** — envoi en Base64 JSON : `{"algorithm","challenge","salt","answer","signature","target_path"}`.
+### 1) Proof-of-Work (anti-abuse)
+Each completion requires an `X-Ds-Pow-Response` header:
+1. **Challenge** — `POST /api/v0/chat/create_pow_challenge` with `target_path` → `algorithm, challenge, salt, signature, difficulty, expire_at, target_path`.
+2. **Solve** — find `answer ∈ [0, difficulty]` such that `DeepSeekHash(salt_expireAt_answer) == challenge`.
+   - Custom Keccak algorithm embedded in `lib/sha3_wasm_bg.7b9ca65ddd.wasm` (executed as-is, **not** standard SHA-256/SHA3).
+3. **Proof** — Base64-encoded JSON: `{"algorithm","challenge","salt","answer","signature","target_path"}`.
 
-> Les challenges non résolus peuvent être pré-chauffés (TTL ~300 s) ; une preuve résolue est **à usage unique**.
+> Unsolved challenges can be pre-warmed (TTL ~300 s); a solved proof is **single-use**.
 
-### 2) Sessions, contexte & prompt
-4. **Session** — `POST /api/v0/chat_session/create` renvoie un `chat_session.id` réutilisé quelques requêtes puis tourné (meilleur équilibre latence/bruit).
-5. **Transcript aplati** — le proxy convertit les messages OpenAI (system/user/assistant/tool) en prompt texte attendu par le web. Il annonce une fenêtre jusqu’à **1M tokens** (`/v1/models`), mais la limite réellement acceptée dépend de l’endpoint/compte amont.
-6. **Complétion** — `POST /api/v0/chat/completion` avec `model: default|thinking`, prompt et paramètres ; réponse en **SSE**.
+### 2) Sessions, context & prompt
+4. **Session** — `POST /api/v0/chat_session/create` returns a `chat_session.id` reused for a few requests then rotated (latency/noise trade-off).
+5. **Flattened transcript** — the proxy converts OpenAI messages (system/user/assistant/tool) into the text prompt expected by the web endpoint. It advertises up to a **1M token** window (`/v1/models`), but the effective limit depends on the upstream endpoint/account.
+6. **Completion** — `POST /api/v0/chat/completion` with `model: default|thinking`, prompt, and params; response is **SSE**.
 
-### 3) Traduction SSE → OpenAI
-Le flux DeepSeek (snapshots `response.fragments`, appends `{"v":"..."}`, remplacements/patchs ciblés, événements de statut) est réassemblé puis mappé :
-- fragments `THINK` → `reasoning_content` (modèle `deepseek-reasoner`)
-- fragments texte → `delta.content` / `message.content`
-- fin de flux → `finish_reason` (`stop` / `tool_calls`), `usage` agrégé relayé
+### 3) SSE → OpenAI translation
+The DeepSeek stream (snapshots `response.fragments`, appends `{"v":"..."}`, targeted replacements/patches, status events) is reassembled and mapped:
+- `THINK` fragments → `reasoning_content` (`deepseek-reasoner`)
+- text fragments → `delta.content` / `message.content`
+- end of stream → `finish_reason` (`stop` / `tool_calls`), relayed aggregate `usage`
 
-### 4) Tool calling (émulation)
-L’endpoint web n’expose pas de function-calling natif ; le proxy l’émule :
-- **Injection** des schémas `tools` dans un bloc d’instructions système (noms, JSON Schema, règles, `tool_choice`/`parallel_tool_calls`).
-- **Parsing** des réponses en `tool_calls` OpenAI depuis JSON (`{"tool_calls":[...]}`) **ou** balisage natif **DSML** (`<｜DSML｜ invoke/parameter>`), avec normalisation/coercition des arguments.
-- **Streaming sûr** : `streamgate` retient une courte traîne (`STREAM_HOLD_BACK`) et coupe l’émission texte dès détection d’un marqueur d’appel pour éviter toute fuite de markup.
-- **Aller-retour** : les messages `role:"tool"` sont réinjectés dans le transcript pour les tours suivants.
+### 4) Tool calling (emulation)
+The web endpoint has no native function calling; the proxy emulates it:
+- **Injects** `tools` schemas into a system instruction block (names, JSON Schema, rules, `tool_choice`/`parallel_tool_calls`).
+- **Parses** replies into OpenAI `tool_calls` from JSON (`{"tool_calls":[...]}`) **or** native **DSML** markup (`<｜DSML｜ invoke/parameter>`), with argument normalization/coercion.
+- **Stream-safe**: `streamgate` holds back a short tail (`STREAM_HOLD_BACK`) and stops text emission once a tool-call marker is detected to prevent markup leaks.
+- **Round-trip**: `role:"tool"` messages are reinjected into the transcript for subsequent turns.
 
-### 5) Résilience, pacing & observabilité
-- **Pool de tokens** : round-robin, hot-reload de `tokens.txt`, masquage en `/health`, pénalités/cooldowns.
-- **Rate limiting** : bucket + écart mini + jitter + cooldown progressif, **1 complétion en vol par token**, pré-chauffage de challenges/sessions échelonné (absorbe le throttling silencieux et réduit les rafales).
-- **Watchdog** : sondes de vivacité jitterées, distinction révocation (`40003` récupérable) vs **suspension** (non récupérable), re-login auto si identifiants configurés.
-- **Observabilité** : `/health`, `/metrics` (Prometheus/JSON), `X-Request-Id`, timings `X-Ds-*`, logs optionnels sans corps/secrets.
+### 5) Resilience, pacing & observability
+- **Token pool**: round-robin, hot-reload of `tokens.txt`, masked in `/health`, penalties/cooldowns.
+- **Rate limiting**: bucket + min gap + jitter + escalating cooldown, **1 in-flight completion per token**, staggered pre-warming of challenges/sessions (absorbs silent throttling and reduces bursty patterns).
+- **Watchdog**: jittered liveness probes, distinguishes revocation (recoverable `40003`) from **suspension** (not recoverable), optional auto re-login when credentials are configured.
+- **Observability**: `/health`, `/metrics` (Prometheus/JSON), `X-Request-Id`, `X-Ds-*` timings, optional lightweight logs without bodies/secrets.
 
 ---
 
 ## 🔌 API
 
-| Méthode | Chemin | Description |
+| Method | Path | Description |
 |---|---|---|
-| `GET` | `/`, `/v1` | Info service (HTML navigateur, JSON API) |
-| `GET` | `/health` | Santé, uptime, tokens (masqués), warm/rate/watchdog/auth, métriques |
-| `GET` | `/metrics` | Prometheus (`text/plain`) ou JSON (`Accept: application/json`) |
-| `GET` | `/v1/models` | Modèles et capacités |
+| `GET` | `/`, `/v1` | Service info (HTML for browsers, JSON for clients) |
+| `GET` | `/health` | Health, uptime, tokens (masked), warm/rate/watchdog/auth, metrics |
+| `GET` | `/metrics` | Prometheus (`text/plain`) or JSON (`Accept: application/json`) |
+| `GET` | `/v1/models` | Models and capabilities |
 | `POST` | `/v1/chat/completions` | Chat completions (stream/non-stream), `tools` |
 
-### 🧱 Modèles
+### 🧱 Models
 
-| Modèle | Mode | Raisonnement | Outils | Contexte annoncé | Sortie max (hint) |
+| Model | Mode | Reasoning | Tools | Advertised context | Max output (hint) |
 |---|---|---:|---:|---:|---:|
-| `deepseek-chat` | `default` | — | ✅ (émulés) | **1M** | 8192 |
-| `deepseek-reasoner` | `thinking` | `reasoning_content` | ✅ (émulés) | **1M** | 32768 |
+| `deepseek-chat` | `default` | — | ✅ (emulated) | **1M** | 8192 |
+| `deepseek-reasoner` | `thinking` | `reasoning_content` | ✅ (emulated) | **1M** | 32768 |
 
-> La fenêtre effective dépend de l’acceptation amont. `usage` reflète l’agrégat amont (pas de split prompt/completion).
+> Effective window depends on upstream acceptance. `usage` reflects upstream aggregate (no prompt/completion split).
 
 ---
 
@@ -186,12 +186,12 @@ curl http://127.0.0.1:8787/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{
     "model": "deepseek-chat",
-    "messages": [{"role":"user","content":"Quel temps fait-il à Paris ?"}],
+    "messages": [{"role":"user","content":"What is the weather in Paris?"}],
     "tools": [{
       "type": "function",
       "function": {
         "name": "get_weather",
-        "description": "Météo actuelle pour une ville",
+        "description": "Current weather for a city",
         "parameters": {"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}
       }
     }]
@@ -199,99 +199,99 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 ```
 
 <details>
-<summary><b>Détails (formats, choix d’outil, streaming)</b></summary>
+<summary><b>Details (formats, tool choice, streaming)</b></summary>
 
-| Champ | Comportement |
+| Field | Behavior |
 |---|---|
-| `tool_choice: "auto"` / omis | le modèle décide |
-| `tool_choice: "none"` | outils désactivés, réponse texte |
-| `tool_choice: "required"` | au moins un appel imposé |
-| `tool_choice: {"type":"function","function":{"name":"X"}}` | outil `X` imposé |
-| `parallel_tool_calls: false` | réduit au premier appel |
+| `tool_choice: "auto"` / omitted | model decides |
+| `tool_choice: "none"` | tools disabled, text response |
+| `tool_choice: "required"` | at least one call required |
+| `tool_choice: {"type":"function","function":{"name":"X"}}` | force tool `X` |
+| `parallel_tool_calls: false` | keep only the first call |
 
-- Sorties parsées : JSON et DSML (barres pleines `｜DSML｜`). Les arguments sont normalisés (objets, chaînes JSON/double-encodées récupérées quand possible).
-- En streaming, les marqueurs d’appel ne sont jamais émis dans `content` (hold-back). Le proxy renvoie des `tool_calls` OpenAI valides et applique `finish_reason: "tool_calls"`.
-- Tests : `node scripts/test-parsers.js`, `node scripts/test-streamgate.js`, `node scripts/test-tools.js` (proxy actif).
+- Parsed outputs: JSON and DSML (fullwidth `｜DSML｜` separators). Arguments are normalized (objects, JSON/double-encoded strings recovered when possible).
+- During streaming, tool-call markers are never emitted in `content` (hold-back). The proxy returns valid OpenAI `tool_calls` and sets `finish_reason: "tool_calls"`.
+- Tests: `node scripts/test-parsers.js`, `node scripts/test-streamgate.js`, `node scripts/test-tools.js` (proxy running).
 </details>
 
 ---
 
-## 🤖 Intégrations (agents de codage)
+## 🤖 Integrations (coding agents)
 
-> **Tous les tutoriels : [tutos/](tutos/README.md)** — base `http://127.0.0.1:8787/v1`, modèles `deepseek-chat` / `deepseek-reasoner`, clé factice `public` si requise.
+> **All tutorials: [tutos/](tutos/README.md)** — base `http://127.0.0.1:8787/v1`, models `deepseek-chat` / `deepseek-reasoner`, dummy key `public` if required.
 
-| Agent / outil | Guide |
+| Agent / tool | Guide |
 |---|---|
 | OpenCode | [tutos/OPENCODE.md](tutos/OPENCODE.md) |
-| Claude Code (via compat OpenAI) | [tutos/CLAUDECODE.md](tutos/CLAUDECODE.md) |
+| Claude Code (via OpenAI compat) | [tutos/CLAUDECODE.md](tutos/CLAUDECODE.md) |
 | Cursor | [tutos/CURSOR.md](tutos/CURSOR.md) |
 | Windsurf | [tutos/WINDSURF.md](tutos/WINDSURF.md) |
 | Cline (VS Code) | [tutos/CLINE.md](tutos/CLINE.md) |
 | Continue (VS Code / JetBrains) | [tutos/CONTINUE.md](tutos/CONTINUE.md) |
 | Aider | [tutos/AIDER.md](tutos/AIDER.md) |
 | GitHub Copilot (BYOK/compat) | [tutos/GITHUB_COPILOT.md](tutos/GITHUB_COPILOT.md) |
-| Codex CLI & CLIs OpenAI | [tutos/CODEX_CLI.md](tutos/CODEX_CLI.md) |
+| Codex CLI & OpenAI CLIs | [tutos/CODEX_CLI.md](tutos/CODEX_CLI.md) |
 | Zed | [tutos/ZED.md](tutos/ZED.md) |
 | JetBrains IDEs | [tutos/JETBRAINS.md](tutos/JETBRAINS.md) |
-| SDK OpenAI (Python/Node/curl) | [tutos/OPENAI_SDK.md](tutos/OPENAI_SDK.md) |
+| OpenAI SDK (Python/Node/curl) | [tutos/OPENAI_SDK.md](tutos/OPENAI_SDK.md) |
 
 ---
 
 ## ⚙️ Configuration
 
-Toutes les variables sont optionnelles. `.env` est **auto-chargé** (sans écraser l’existant). Secrets (`.env`, `tokens.txt`) ignorés par git, tokens persistés en `0600`.
+All variables are optional. `.env` is **auto-loaded** (without overriding existing vars). Secrets (`.env`, `tokens.txt`) are gitignored; tokens are persisted with mode `0600`.
 
-| Variable | Défaut | Rôle |
+| Variable | Default | Purpose |
 |---|---:|---|
-| `PORT` / `HOST` | `8787` / `0.0.0.0` | Écoute |
-| `API_KEY` | — | Protège le proxy (`Authorization: Bearer`) |
-| `DEFAULT_MODEL` | `deepseek-chat` | Modèle par défaut |
-| `DEEPSEEK_TOKENS` / `DEEPSEEK_TOKENS_FILE` | — / `./tokens.txt` | Pool de tokens (hot-reload) |
-| `DEEPSEEK_EMAIL` / `DEEPSEEK_PASSWORD` / `DEEPSEEK_TOKEN_PERSIST` | — | Re-login auto + persistance |
-| `DEEPSEEK_PROXY` | — | Proxy sortant HTTP `CONNECT` |
-| `WARM_POOL` / `WARM_SESSION_USES` / `WARM_REFILL_*` | `3` / `4` / … | Pré-chauffage & échelonnement |
+| `PORT` / `HOST` | `8787` / `0.0.0.0` | Listen address |
+| `API_KEY` | — | Protect the proxy (`Authorization: Bearer`) |
+| `DEFAULT_MODEL` | `deepseek-chat` | Default model |
+| `DEEPSEEK_TOKENS` / `DEEPSEEK_TOKENS_FILE` | — / `./tokens.txt` | Token pool (hot-reload) |
+| `DEEPSEEK_EMAIL` / `DEEPSEEK_PASSWORD` / `DEEPSEEK_TOKEN_PERSIST` | — | Auto re-login + persistence |
+| `DEEPSEEK_PROXY` | — | Outbound HTTP `CONNECT` proxy |
+| `WARM_POOL` / `WARM_SESSION_USES` / `WARM_REFILL_*` | `3` / `4` / … | Pre-warming & staggering |
 | `RATE_BURST` / `RATE_REFILL_MS` / `RATE_MIN_GAP_MS` / `RATE_JITTER_MS` | `4` / `6000` / `1500` / `500` | Pacing & bucket |
-| `RATE_COOLDOWN_MS` / `RATE_COOLDOWN_MAX_MS` / `RATE_MAX_WAIT_MS` | `45000` / `300000` / `35000` | Recul sur throttling |
-| `WATCHDOG_MS` / `WATCHDOG_JITTER_MS` | `120000` / `20000` | Sondes de vivacité |
-| `STREAM_HOLD_BACK` | `32` | Garde-fou streaming outils |
-| `LOG_REQUESTS` | — | `1` = logs légers (sans corps/secrets) |
+| `RATE_COOLDOWN_MS` / `RATE_COOLDOWN_MAX_MS` / `RATE_MAX_WAIT_MS` | `45000` / `300000` / `35000` | Throttle backoff |
+| `WATCHDOG_MS` / `WATCHDOG_JITTER_MS` | `120000` / `20000` | Liveness probes |
+| `STREAM_HOLD_BACK` | `32` | Stream tool-call safety buffer |
+| `LOG_REQUESTS` | — | `1` = lightweight logs (no bodies/secrets) |
 
-> Liste complète et variables signup/captcha/mailbox : [`.env.example`](.env.example) et [tutos/SETUP.md](tutos/SETUP.md).
+> Full list including signup/captcha/mailbox variables: [`.env.example`](.env.example) and [tutos/SETUP.md](tutos/SETUP.md).
 
 ---
 
-## 🧬 Cycle de vie des tokens & limites
+## 🧬 Token lifecycle & limits
 
-- **Pas de refresh token** : seuls login/register/oauth émettent un `userToken` — un token se remplace, il ne se « rafraîchit » pas.
-- **`40003` ≠ toujours pareil** : révocation (re-login possible) vs **suspension** (tous endpoints en échec, attendre) — le proxy distingue, recule et l’expose dans `/health`.
-- **Throttling silencieux** : réponses vides après rafales ; le proxy cadence, attend et réessaie (backoff progressif).
-- **Anti-suspension ≠ garantie** : pacing/jitter/gaps, sessions réutilisées, pré-warm échelonné et watchdog réduisent les signaux, mais ne suppriment pas le risque.
+- **No refresh token**: only login/register/oauth mint a `userToken` — tokens are replaced, not refreshed.
+- **`40003` is ambiguous**: revocation (re-login may help) vs **suspension** (all endpoints fail, wait it out) — the proxy distinguishes, backs off, and reports state in `/health`.
+- **Silent throttling**: empty responses after bursts; the proxy paces, waits, and retries (progressive backoff).
+- **Anti-suspension is not guaranteed**: pacing/jitter/gaps, session reuse, staggered pre-warm and watchdog reduce signals but cannot eliminate policy risk.
 
 > [!WARNING]
-> Gardez un volume faible et « humain », préférez une sortie réseau propre/résidentielle si nécessaire, et évitez les boucles automatisées soutenues.
+> Keep volume low and human-like, prefer clean/residential egress when needed, and avoid sustained automated loops.
 
 ---
 
-## 🗂️ Structure du dépôt
+## 🗂️ Repository layout
 
 ```text
-server.js                 Serveur HTTP, couche OpenAI, routage, métriques
+server.js                 HTTP server, OpenAI layer, routing, metrics
 lib/
-  deepseek.js             Client amont (challenge/session/completion, tunnel proxy)
-  pow.js                  Solveur PoW WASM
-  stream.js               Assemblage SSE → fragments
-  streamgate.js           Hold-back / détection d’appels d’outils en stream
-  tools.js                Émulation tools (prompt, parsing JSON/DSML, transcript)
-  pool.js                 Pool de tokens, hot-reload, swap/re-login
+  deepseek.js             Upstream client (challenge/session/completion, proxy tunnel)
+  pow.js                  WASM PoW solver
+  stream.js               SSE assembly → fragments
+  streamgate.js           Stream hold-back / tool-call marker detection
+  tools.js                Tool emulation (prompt, JSON/DSML parsing, transcript)
+  pool.js                 Token pool, hot-reload, swap/re-login
   ratelimit.js            Bucket + mutex + pacing/jitter/cooldown
-  warm.js                 Pré-chauffage challenges/sessions
-  watchdog.js             Sonde de vivacité, déclenche re-login
-  auth.js / signup.js     Login et inscription (expérimental)
-  captcha.js / mailbox.js Solveurs captcha & lecture de codes
-  metrics.js / env.js     Métriques et chargement .env
+  warm.js                 Pre-warm challenges/sessions
+  watchdog.js             Liveness probe, triggers re-login
+  auth.js / signup.js     Login and signup (experimental)
+  captcha.js / mailbox.js Captcha solvers & verification-code readers
+  metrics.js / env.js     Metrics and .env loading
 scripts/                  login, signup, tests, bench, probes
-tutos/                    Guides d’intégration (OpenCode, Cursor, Cline, Aider, etc.)
-run.sh                    démarrage/redémarrage (pidfile)
+tutos/                    Integration guides (OpenCode, Cursor, Cline, Aider, etc.)
+run.sh                    start/restart helper (pidfile)
 ```
 
 ---
@@ -301,15 +301,15 @@ run.sh                    démarrage/redémarrage (pidfile)
 ```bash
 docker build -t free-deepseek-api .
 docker run -p 8787:8787 -e API_KEY=sk-local -v "$PWD/tokens.txt:/app/tokens.txt:ro" free-deepseek-api
-# ou
+# or
 docker compose up -d --build
 ```
 
 ## ✅ Tests
 
 ```bash
-npm run test:offline   # parsers + streamgate + PoW (sans réseau)
-npm run test:all       # offline + smoke portes signup (réseau)
+npm run test:offline   # parsers + streamgate + PoW (no network)
+npm run test:all       # offline + signup gate smoke (network)
 node --check server.js lib/*.js scripts/*.js
 ```
 

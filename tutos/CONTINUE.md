@@ -1,14 +1,14 @@
 # Continue + Free DeepSeek API
 
-[Continue](https://continue.dev) est un assistant de code pour VS Code et JetBrains, compatible avec les backends **OpenAI**.
+[Continue](https://continue.dev) is a coding assistant for VS Code and JetBrains, compatible with **OpenAI** backends.
 
 ## Configuration (`config.json` / `config.yaml`)
 
-Selon votre version de Continue, ajoutez un modèle pointant vers le proxy.
+Depending on your Continue version, add a model pointing to the proxy.
 
-### Exemple (format JSON courant)
+### Example (common JSON format)
 
-Dans `~/.continue/config.json` :
+In `~/.continue/config.json`:
 
 ```json
 {
@@ -33,9 +33,9 @@ Dans `~/.continue/config.json` :
 }
 ```
 
-### Exemple (format YAML récent)
+### Example (recent YAML format)
 
-Dans `~/.continue/config.yaml` :
+In `~/.continue/config.yaml`:
 
 ```yaml
 models:
@@ -53,16 +53,16 @@ models:
     roles: [chat]
 ```
 
-> Adaptez les clés (`apiBase`/`apiKey`, `contextLength`, `roles`) au schéma exact de votre version de Continue.
+> Adapt keys (`apiBase`/`apiKey`, `contextLength`, `roles`) to your Continue version's exact schema.
 
-## Utilisation
+## Usage
 
-- Sélectionnez le modèle « DeepSeek … (Free Proxy) » dans Continue.
-- Chat, édition inline et autocomplétion (si activée pour le modèle) passent par `POST /v1/chat/completions`.
-- Les appels d’outils (si utilisés par votre flux) sont émulés par le proxy.
+- Select the "DeepSeek … (Free Proxy)" model in Continue.
+- Chat, inline edits, and autocomplete (if enabled for the model) use `POST /v1/chat/completions`.
+- Tool calls (when used by your flow) are emulated by the proxy.
 
-## Dépannage
+## Troubleshooting
 
-- Vérifiez `curl http://127.0.0.1:8787/v1/models`.
-- Si le proxy a `API_KEY` activé, utilisez la même valeur dans `apiKey`.
-- Latence variable = pacing/anti-throttle normal ; consultez `/health` et `/metrics`.
+- Verify `curl http://127.0.0.1:8787/v1/models`.
+- If the proxy has `API_KEY` enabled, use the same value in `apiKey`.
+- Variable latency = normal pacing/anti-throttle behavior; check `/health` and `/metrics`.

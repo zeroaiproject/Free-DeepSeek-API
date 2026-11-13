@@ -1,15 +1,15 @@
 # OpenCode + Free DeepSeek API
 
-[OpenCode](https://opencode.ai) est un agent de codage CLI open-source. Ce proxy s’y connecte comme fournisseur **OpenAI-compatible**.
+[OpenCode](https://opencode.ai) is an open-source coding agent CLI. This proxy connects as an **OpenAI-compatible** provider.
 
-## Prérequis
+## Prerequisites
 
-- Proxy lancé et token valide (`curl http://127.0.0.1:8787/health`)
-- OpenCode installé (`opencode` dans le PATH)
+- Proxy running with a valid token (`curl http://127.0.0.1:8787/health`)
+- OpenCode installed (`opencode` in PATH)
 
 ## Configuration
 
-Ajoutez le provider dans `~/.config/opencode/opencode.jsonc` (créez le fichier si besoin) :
+Add the provider in `~/.config/opencode/opencode.jsonc` (create if needed):
 
 ```jsonc
 {
@@ -43,31 +43,31 @@ Ajoutez le provider dans `~/.config/opencode/opencode.jsonc` (créez le fichier 
 }
 ```
 
-> `apiKey` doit être non vide pour le client OpenAI-compatible ; le proxy l’ignore sauf si `API_KEY` est défini côté serveur (auquel cas mettez la même valeur).
-> Si votre version d’OpenCode attend encore la clé `providers` / `settings` / `compatibility`, adaptez la forme au schéma indiqué par `opencode --help` ou la doc de votre version — les champs essentiels restent `baseURL`, `apiKey`, et les IDs de modèles `deepseek-chat` / `deepseek-reasoner`.
+> `apiKey` must be non-empty for the OpenAI-compatible client; the proxy ignores it unless `API_KEY` is set server-side (then use the same value).
+> If your OpenCode version expects a different schema key (e.g. `providers`/`settings`/`compatibility`), adapt to your version's config format — the essentials are `baseURL`, `apiKey`, and model IDs `deepseek-chat` / `deepseek-reasoner`.
 
-## Utilisation
+## Usage
 
 ```bash
-# vérifier que les modèles sont vus
+# verify models are visible
 opencode models | grep freedeepseek
 
-# lancer avec un modèle
+# run with a model
 opencode --model freedeepseek/deepseek-chat
 
-# exécution non-interactive avec outils
-opencode run --model freedeepseek/deepseek-chat "Liste les fichiers du projet et résume l'architecture."
+# non-interactive run with tools
+opencode run --model freedeepseek/deepseek-chat "List project files and summarize the architecture."
 ```
 
-## Conseils
+## Tips
 
-- **Outils** : supportés via émulation (JSON/DSML) — laissez `tool_call: true`. Pour des tâches complexes, gardez les prompts/outils concis.
-- **Reasoner** : utilisez `deepseek-reasoner` pour les tâches demandant réflexion ; le raisonnement est exposé en `reasoning_content`.
-- **Contexte 1M** : la fenêtre annoncée est 1M tokens ; évitez d’envoyer inutilement d’énormes historiques pour réduire latence et pression amont.
-- **Débit** : le proxy cadence les requêtes (gap/jitter/cooldown). En cas de réponse lente, c’est souvent volontaire/anti-throttle.
+- **Tools**: supported via emulation (JSON/DSML) — keep `tool_call: true`. For complex tasks, keep prompts/tools concise.
+- **Reasoner**: use `deepseek-reasoner` for tasks requiring deeper thinking; reasoning is exposed as `reasoning_content`.
+- **1M context**: the advertised window is 1M tokens; avoid sending unnecessarily huge histories to reduce latency and upstream pressure.
+- **Throughput**: the proxy paces requests (gap/jitter/cooldown). Slower responses can be intentional/anti-throttle behavior.
 
-## Dépannage
+## Troubleshooting
 
-- Modèle absent : vérifiez la syntaxe JSONC et relancez `opencode`.
-- Erreurs 401 du proxy : alignez `apiKey` client avec `API_KEY` serveur (ou désactivez `API_KEY`).
-- `503 account_suspended` / token mort : voir `tutos/SETUP.md` (section dépannage) et `/health`.
+- Model not listed: check JSONC syntax and restart `opencode`.
+- Proxy 401 errors: align client `apiKey` with server `API_KEY` (or disable `API_KEY`).
+- `503 account_suspended` / dead token: see `tutos/SETUP.md` and `/health`.

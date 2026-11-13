@@ -1,60 +1,58 @@
 # Setup — Free DeepSeek API
 
-Ce guide couvre l’installation du proxy, la configuration des tokens et les vérifications de base.
+This guide covers proxy installation, token configuration, and basic verification.
 
-## 1) Prérequis
+## 1) Prerequisites
 
-- **Node.js ≥ 18** (recommandé 20/22) ou **Docker**
-- Un compte DeepSeek (`chat.deepseek.com`)
-- Aucun package npm requis (zéro dépendance runtime)
+- **Node.js ≥ 18** (20/22 recommended) or **Docker**
+- A DeepSeek account (`chat.deepseek.com`)
+- No npm packages required (zero runtime dependencies)
 
-## 2) Installation locale
+## 2) Local installation
 
 ```bash
 git clone https://github.com/zeroaiproject/Free-DeepSeek-API.git
 cd free-deepseek-api
-cp .env.example .env          # optionnel (auto-chargé au démarrage)
+cp .env.example .env          # optional (auto-loaded at startup)
 ```
 
-### Obtenir un token (`userToken`)
+### Get a token (`userToken`)
 
-**Option A — Navigateur (recommandé, Google/Apple/mobile inclus)**
+**Option A — Browser (recommended, works with Google/Apple/mobile logins)**
 
-1. Connectez-vous sur https://chat.deepseek.com
-2. Ouvrez les DevTools → Console et exécutez :
+1. Sign in at https://chat.deepseek.com
+2. Open DevTools → Console and run:
    ```js
    localStorage.getItem('userToken')
    ```
-3. Copiez la valeur **telle quelle** (blob base64, peut contenir `+`, `/`, `=` — ne pas URL-encoder) dans `tokens.txt` (une ligne par token).
+3. Copy the value **as-is** (base64 blob, may contain `+`, `/`, `=` — do not URL-encode) into `tokens.txt` (one per line).
 
-**Option B — Email + mot de passe**
-
-```bash
-node scripts/login.js vous@example.com 'votre-mot-de-passe'
-# ajoutez le token affiché à tokens.txt
-```
-
-> Comptes créés via Google sans mot de passe : définissez-en un via « mot de passe oublié » sur le site (étape manuelle unique) pour permettre la re-connexion automatique plus tard.
-
-**Option C — Inscription automatisée (expérimental)**
+**Option B — Email + password**
 
 ```bash
-node scripts/signup.js --email vous@gmail.com --mailbox imap --captcha capsolver --persist
+node scripts/login.js you@example.com 'your-password'
+# add the printed token to tokens.txt
 ```
 
-Nécessite un solveur captcha valide (hCaptcha vérifié côté serveur) et une boîte mail accessible (IMAP/HTTP) pour lire le code. `node scripts/test-signup.js` valide les portes PoW/payload sans captcha.
+**Option C — Automated signup (experimental)**
 
-### Lancer le proxy
+```bash
+node scripts/signup.js --email you@gmail.com --mailbox imap --captcha capsolver --persist
+```
+
+Requires a valid captcha solver (server-verified hCaptcha) and an accessible mailbox (IMAP/HTTP) to read the code. `node scripts/test-signup.js` validates PoW/payload gates without a captcha.
+
+### Start the proxy
 
 ```bash
 ./run.sh
-# ou
+# or
 npm start
-# ou
+# or
 node server.js
 ```
 
-Par défaut : `http://127.0.0.1:8787`
+Default: `http://127.0.0.1:8787`
 
 ## 3) Docker
 
@@ -67,22 +65,22 @@ docker run -d --name freedeepseek \
   free-deepseek-api
 ```
 
-Ou via Compose :
+Or with Compose:
 
 ```bash
 docker compose up -d --build
 ```
 
-## 4) Vérifications
+## 4) Verification
 
 ```bash
-# santé / état (tokens masqués, rate, watchdog, métriques)
+# health / status (masked tokens, rate, watchdog, metrics)
 curl http://127.0.0.1:8787/health
 
-# modèles
+# models
 curl http://127.0.0.1:8787/v1/models
 
-# complétion (non-stream)
+# completion (non-stream)
 curl http://127.0.0.1:8787/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model":"deepseek-chat","messages":[{"role":"user","content":"Ping"}]}'
@@ -90,46 +88,46 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 # streaming
 curl -N http://127.0.0.1:8787/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{"model":"deepseek-chat","stream":true,"messages":[{"role":"user","content":"Compte jusqu\u0027à 5"}]}'
+  -d '{"model":"deepseek-chat","stream":true,"messages":[{"role":"user","content":"Count to 5"}]}'
 ```
 
-Tests hors-ligne (sans token) :
+Offline tests (no token required):
 
 ```bash
 npm run test:offline   # parsers + streamgate + PoW
 node --check server.js lib/*.js scripts/*.js
 ```
 
-## 5) Configuration utile
+## 5) Useful configuration
 
-Éditez `.env` (auto-chargé, sans écraser l’environnement existant) :
+Edit `.env` (auto-loaded, does not override existing environment variables):
 
-| Variable | Rôle |
+| Variable | Purpose |
 |---|---|
-| `PORT` / `HOST` | Écoute (`8787`, `0.0.0.0`) |
-| `API_KEY` | Protège le proxy (`Authorization: Bearer <key>`) |
-| `DEFAULT_MODEL` | `deepseek-chat` (défaut) ou `deepseek-reasoner` |
-| `DEEPSEEK_TOKENS` / `DEEPSEEK_TOKENS_FILE` | Pool de tokens (hot-reload de `tokens.txt`) |
-| `DEEPSEEK_EMAIL` / `DEEPSEEK_PASSWORD` / `DEEPSEEK_TOKEN_PERSIST` | Re-login automatique si token révoqué |
-| `DEEPSEEK_PROXY` | Sortie via proxy HTTP (`CONNECT`) |
-| `RATE_*` / `WARM_*` / `WATCHDOG_*` | Pacing, pré-chauffage, sondes (valeurs prudentes par défaut) |
-| `LOG_REQUESTS=1` | Logs légers méthode/chemin/statut/latence |
+| `PORT` / `HOST` | Listen address (`8787`, `0.0.0.0`) |
+| `API_KEY` | Protect the proxy (`Authorization: Bearer <key>`) |
+| `DEFAULT_MODEL` | `deepseek-chat` (default) or `deepseek-reasoner` |
+| `DEEPSEEK_TOKENS` / `DEEPSEEK_TOKENS_FILE` | Token pool (hot-reloads `tokens.txt`) |
+| `DEEPSEEK_EMAIL` / `DEEPSEEK_PASSWORD` / `DEEPSEEK_TOKEN_PERSIST` | Automatic re-login if a token is revoked |
+| `DEEPSEEK_PROXY` | Outbound HTTP proxy (`CONNECT`) |
+| `RATE_*` / `WARM_*` / `WATCHDOG_*` | Pacing, pre-warming, probes (conservative defaults) |
+| `LOG_REQUESTS=1` | Lightweight method/path/status/latency logs |
 
-## 6) Modèles & capacités
+## 6) Models & capabilities
 
-| Modèle | Mode | Raisonnement | Outils (émulés) | Contexte annoncé |
+| Model | Mode | Reasoning | Tools (emulated) | Advertised context |
 |---|---|---:|---:|---:|
-| `deepseek-chat` | default | non | oui | 1M tokens |
-| `deepseek-reasoner` | thinking | `reasoning_content` | oui | 1M tokens |
+| `deepseek-chat` | default | no | yes | 1M tokens |
+| `deepseek-reasoner` | thinking | `reasoning_content` | yes | 1M tokens |
 
-> La limite effective dépend de l’endpoint web amont et du compte. Le proxy relaie et annonce 1M ; adaptez si besoin côté client.
+> The effective limit depends on the upstream web endpoint and account. The proxy relays and advertises 1M; adjust client-side limits if needed.
 
-## 7) Dépannage rapide
+## 7) Quick troubleshooting
 
-- **Aucun token disponible** : ajoutez un token dans `tokens.txt` (rechargé à chaud) ou `DEEPSEEK_TOKENS`.
-- **`40003` / token mort** : remplacez le token ou configurez `DEEPSEEK_EMAIL/PASSWORD` (compte avec mot de passe).
-- **Compte suspendu** : `/health` l’indique (`auth.suspendedUntil`) — re-login impossible jusqu’à expiration.
-- **Réponses vides / lenteur** : throttling amont silencieux ; le proxy applique cooldown/jitter/gap — réduisez le débit.
-- **Client exige une clé** : mettez `apiKey: "public"` (ou la valeur de `API_KEY` si activée).
+- **No token available**: add a token to `tokens.txt` (hot-reloaded) or `DEEPSEEK_TOKENS`.
+- **`40003` / dead token**: replace the token or configure `DEEPSEEK_EMAIL/PASSWORD` (password-based account).
+- **Account suspended**: `/health` reports it (`auth.suspendedUntil`) — re-login cannot clear a suspension until it expires.
+- **Empty/slow responses**: silent upstream throttling; the proxy applies cooldown/jitter/gap — reduce request rate.
+- **Client requires a key**: set `apiKey: "public"` (or your `API_KEY` value if enabled).
 
-Passez ensuite au tutoriel de votre outil : [OpenCode](OPENCODE.md), [Claude Code](CLAUDECODE.md), [Cursor](CURSOR.md), etc.
+Next, pick your tool guide: [OpenCode](OPENCODE.md), [Claude Code](CLAUDECODE.md), [Cursor](CURSOR.md), etc.

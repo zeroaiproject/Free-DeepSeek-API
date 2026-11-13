@@ -1,33 +1,33 @@
 # Cline (VS Code) + Free DeepSeek API
 
-[Cline](https://github.com/cline/cline) est un agent de codage autonome pour VS Code. Il supporte les fournisseurs **OpenAI-compatible**.
+[Cline](https://github.com/cline/cline) is an autonomous coding agent for VS Code. It supports **OpenAI-compatible** providers.
 
 ## Configuration
 
-1. Installez l’extension **Cline** dans VS Code.
-2. Ouvrez les paramètres Cline → **API Provider** : `OpenAI Compatible`.
-3. Renseignez :
-   - **Base URL** : `http://127.0.0.1:8787/v1`
-   - **API Key** : `public` (ou votre `API_KEY`)
-   - **Model ID** : `deepseek-chat` (ou `deepseek-reasoner`)
-4. (Optionnel) Ajustez :
-   - **Context window** : `1000000`
-   - **Max tokens** : `8192` (chat) / `32768` (reasoner)
+1. Install the **Cline** extension in VS Code.
+2. Open Cline settings → **API Provider**: `OpenAI Compatible`.
+3. Set:
+   - **Base URL**: `http://127.0.0.1:8787/v1`
+   - **API Key**: `public` (or your `API_KEY`)
+   - **Model ID**: `deepseek-chat` (or `deepseek-reasoner`)
+4. (Optional) Adjust:
+   - **Context window**: `1000000`
+   - **Max tokens**: `8192` (chat) / `32768` (reasoner)
 
-## Utilisation
+## Usage
 
-- Ouvrez un workspace, lancez Cline, et donnez une tâche (édition, refactor, commandes). Cline utilisera le proxy pour les complétions et les appels d’outils.
-- Pour les tâches nécessitant plus de réflexion, basculez sur `deepseek-reasoner`.
+- Open a workspace, start Cline, and give it a task (edits, refactors, commands). Cline will use the proxy for completions and tool calls.
+- For reasoning-heavy tasks, switch to `deepseek-reasoner`.
 
-## Bonnes pratiques
+## Best practices
 
-- Le **tool-calling est émulé** : gardez des instructions claires et des outils bien décrits ; si une tâche boucle, simplifiez la demande.
-- Respectez le pacing : le proxy peut attendre (rate limit/jitter) pour rester sous les seuils amont.
-- Ne mettez pas de secrets dans les prompts ; protégez `/health` si le proxy est exposé.
+- **Tool calling is emulated**: keep instructions clear and tool descriptions precise; if a task loops, simplify the request.
+- Respect pacing: the proxy may wait (rate limit/jitter) to stay under upstream thresholds.
+- Do not put secrets in prompts; protect `/health` if the proxy is exposed.
 
-## Dépannage
+## Troubleshooting
 
-- **Connexion refusée** : vérifiez que le proxy écoute (`PORT` par défaut 8787).
-- **401 invalid api key** : mettez la même clé dans Cline que dans `API_KEY` (ou videz `API_KEY` côté proxy).
-- **Réponses vides/lentes** : throttling amont → le proxy réessaie avec cooldown ; consultez `/health` (rate/metrics/auth/suspension).
-- **Pas de token disponible** : ajoutez un `userToken` valide dans `tokens.txt`.
+- **Connection refused**: verify the proxy is listening (default port 8787).
+- **401 invalid api key**: use the same key in Cline as server `API_KEY` (or unset `API_KEY` on the proxy).
+- **Empty/slow responses**: upstream throttling → the proxy retries with cooldown; check `/health` (rate/metrics/auth/suspension).
+- **No token available**: add a valid `userToken` to `tokens.txt`.

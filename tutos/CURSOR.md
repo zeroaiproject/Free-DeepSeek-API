@@ -1,29 +1,29 @@
 # Cursor + Free DeepSeek API
 
-[Cursor](https://cursor.com) peut consommer des endpoints **OpenAI-compatible** (selon l’option « OpenAI API Key » / override de base URL disponible dans votre version).
+[Cursor](https://cursor.com) can consume **OpenAI-compatible** endpoints (depending on the "OpenAI API Key" / base URL override options available in your version).
 
 ## Configuration
 
-1. Lancez le proxy (`http://127.0.0.1:8787`) avec un token valide.
-2. Dans Cursor : **Settings → Models / OpenAI** (libellés variables selon version) :
-   - **OpenAI API Key** : `public` (ou la valeur de `API_KEY` si vous en avez défini une)
-   - **Override OpenAI Base URL** : `http://127.0.0.1:8787/v1`
-3. Ajoutez/choisissez un modèle personnalisé :
+1. Start the proxy (`http://127.0.0.1:8787`) with a valid token.
+2. In Cursor: **Settings → Models / OpenAI** (labels vary by version):
+   - **OpenAI API Key**: `public` (or your `API_KEY` value if set)
+   - **Override OpenAI Base URL**: `http://127.0.0.1:8787/v1`
+3. Add/select a custom model:
    - `deepseek-chat`
    - `deepseek-reasoner`
 
-## Paramètres recommandés
+## Recommended settings
 
-- **Context window** : jusqu’à `1000000` (1M) si le champ est éditable
-- **Max output** : `8192` (chat) / `32768` (reasoner) en point de départ
-- **Streaming** : activé
-- **Tools / function calling** : activé si proposé (émulé côté proxy)
+- **Context window**: up to `1000000` (1M) if editable
+- **Max output**: `8192` (chat) / `32768` (reasoner) as a starting point
+- **Streaming**: enabled
+- **Tools / function calling**: enabled if available (emulated by the proxy)
 
-## Vérification
+## Verification
 
-Dans le chat Cursor, demandez une réponse courte puis un appel d’outil simple (ex. lecture de fichier / action supportée) pour confirmer que le modèle répond via le proxy.
+In Cursor chat, ask for a short response, then try a simple tool-assisted action (if supported) to confirm requests go through the proxy.
 
-Vous pouvez aussi valider côté proxy :
+You can also verify on the proxy side:
 
 ```bash
 curl http://127.0.0.1:8787/health
@@ -32,6 +32,6 @@ curl http://127.0.0.1:8787/v1/models
 
 ## Notes
 
-- Certains flux Cursor (indexation, embeddings, modèles propriétaires) ne passent pas par cet endpoint ; seuls les appels chat OpenAI-compatible sont concernés.
-- Si Cursor impose un format spécifique non supporté, comparez avec un appel `curl` équivalent sur `/v1/chat/completions`.
-- `deepseek-reasoner` peut produire des blocs de raisonnement (`reasoning_content`) — l’UI peut les afficher ou les ignorer selon version.
+- Some Cursor flows (indexing, embeddings, proprietary models) do not use this endpoint; only OpenAI-compatible chat calls are affected.
+- If Cursor requires a specific unsupported format, compare with an equivalent `curl` request to `/v1/chat/completions`.
+- `deepseek-reasoner` may produce reasoning (`reasoning_content`) — the UI may display or ignore it depending on version.

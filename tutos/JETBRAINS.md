@@ -1,38 +1,38 @@
 # JetBrains IDEs + Free DeepSeek API
 
-Fonctionne avec IntelliJ IDEA, PyCharm, WebStorm, GoLand, etc., via les fonctionnalités **AI Assistant** (si BYOK/OpenAI-compatible disponible) ou via des plugins/clients compatibles.
+Works with IntelliJ IDEA, PyCharm, WebStorm, GoLand, etc., via **AI Assistant** features (if BYOK/OpenAI-compatible is available) or via compatible plugins/clients.
 
-## Option 1 — JetBrains AI Assistant (si endpoint personnalisé supporté)
+## Option 1 — JetBrains AI Assistant (if custom endpoint is supported)
 
-1. Ouvrez **Settings/Preferences → Tools → AI Assistant** (ou équivalent selon version/produit).
-2. Configurez un fournisseur personnalisé OpenAI-compatible (si disponible) :
-   - **Base URL** : `http://127.0.0.1:8787/v1`
-   - **API Key** : `public` (ou `API_KEY`)
-   - **Model** : `deepseek-chat` / `deepseek-reasoner`
-   - **Context length** : `1000000` (si configurable)
+1. Open **Settings/Preferences → Tools → AI Assistant** (or equivalent for your version/product).
+2. Configure a custom OpenAI-compatible provider (if available):
+   - **Base URL**: `http://127.0.0.1:8787/v1`
+   - **API Key**: `public` (or `API_KEY`)
+   - **Model**: `deepseek-chat` / `deepseek-reasoner`
+   - **Context length**: `1000000` (if configurable)
 
-> La disponibilité du BYOK OpenAI-compatible dépend de la version et de la licence JetBrains.
+> BYOK OpenAI-compatible availability depends on JetBrains version and license.
 
-## Option 2 — Plugin Continue pour JetBrains
+## Option 2 — Continue plugin for JetBrains
 
-1. Installez le plugin **Continue** depuis le Marketplace JetBrains.
-2. Configurez `~/.continue/config.json` (ou `config.yaml`) comme dans [CONTINUE.md](CONTINUE.md).
-3. Sélectionnez le modèle DeepSeek dans Continue.
+1. Install the **Continue** plugin from the JetBrains Marketplace.
+2. Configure `~/.continue/config.json` (or `config.yaml`) as in [CONTINUE.md](CONTINUE.md).
+3. Select the DeepSeek model in Continue.
 
-## Option 3 — Proxy local via CLI intégré
+## Option 3 — Local proxy via integrated terminal
 
-Utilisez le terminal intégré de l’IDE avec un agent CLI compatible :
+Use the IDE integrated terminal with a compatible CLI agent:
 
-- **Aider** : [AIDER.md](AIDER.md)
-- **OpenCode** : [OPENCODE.md](OPENCODE.md)
+- **Aider**: [AIDER.md](AIDER.md)
+- **OpenCode**: [OPENCODE.md](OPENCODE.md)
 
-## Vérification
+## Verification
 
 ```bash
 curl http://127.0.0.1:8787/v1/models
 ```
 
-## Remarques
+## Notes
 
-- Complétions, chat et actions « agent » ne partagent pas toujours le même backend dans l’IDE ; seul le trafic routé vers l’endpoint configuré utilisera ce proxy.
-- En environnement d’entreprise, vérifiez que `http://127.0.0.1:8787` est accessible depuis l’IDE (proxy système/firewall).
+- Completions, chat, and "agent" actions may not all share the same backend in the IDE; only traffic routed to the configured endpoint will use this proxy.
+- In corporate environments, ensure `http://127.0.0.1:8787` is reachable from the IDE (system proxy/firewall).

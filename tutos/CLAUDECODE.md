@@ -1,27 +1,27 @@
 # Claude Code + Free DeepSeek API
 
-[Claude Code](https://docs.anthropic.com/en/docs/claude-code) est la CLI de codage d’Anthropic. Ce guide décrit l’usage **via compatibilité OpenAI** (tiers/clients qui permettent un endpoint OpenAI-compatible). Si votre installation ne supporte que l’API Anthropic native, un adaptateur/proxy de protocole supplémentaire est requis.
+[Claude Code](https://docs.anthropic.com/en/docs/claude-code) is Anthropic's coding CLI. This guide covers usage **via OpenAI-compatible endpoints** (clients/runners that allow an OpenAI-compatible backend). If your setup only supports the native Anthropic API (`/v1/messages`), an additional protocol adapter/proxy is required.
 
-## Prérequis
+## Prerequisites
 
-- Proxy lancé : `http://127.0.0.1:8787/v1`
-- Token DeepSeek valide dans le proxy (`/health` OK)
+- Proxy running: `http://127.0.0.1:8787/v1`
+- Valid DeepSeek token in the proxy (`/health` OK)
 
-## Configuration (endpoint OpenAI-compatible)
+## Configuration (OpenAI-compatible endpoint)
 
-Claude Code/écosystème évolue ; selon votre version, pointez le backend OpenAI-compatible vers le proxy :
+Claude Code and its ecosystem evolve; depending on your version, point the OpenAI-compatible backend to the proxy:
 
 ```bash
-export OPENAI_API_KEY="public"                 # ou la valeur de API_KEY si activée
+export OPENAI_API_KEY="public"                 # or your API_KEY value if enabled
 export OPENAI_BASE_URL="http://127.0.0.1:8787/v1"
 ```
 
-Puis sélectionnez le modèle exposé par le proxy (si l’outil le permet) :
+Then select a model exposed by the proxy (if supported by your tool):
 
 - `deepseek-chat`
 - `deepseek-reasoner`
 
-Exemple générique (client/runner compatible OpenAI) :
+Generic example (OpenAI-compatible client/runner):
 
 ```bash
 OPENAI_BASE_URL=http://127.0.0.1:8787/v1 \
@@ -29,26 +29,26 @@ OPENAI_API_KEY=public \
 claude --model deepseek-chat
 ```
 
-> Adaptez le nom du flag/modèle à votre version (`--model`, config file, ou profil). Les identifiants exacts sont ceux retournés par `GET /v1/models`.
+> Adapt the flag/model selection to your version (`--model`, config file, or profile). Exact model IDs are returned by `GET /v1/models`.
 
-## Fonctionnalités
+## Capabilities
 
-- **Streaming** : supporté.
-- **Tool use / actions** : pris en charge via l’émulation d’outils du proxy (schémas injectés, réponses JSON/DSML parsées). Les comportements peuvent différer du tool-use natif Anthropic.
-- **Raisonnement** : `deepseek-reasoner` renvoie `reasoning_content`.
-- **Contexte** : fenêtre annoncée jusqu’à **1M tokens** (limite effective amont).
+- **Streaming**: supported.
+- **Tool use / actions**: supported via the proxy's tool emulation (injected schemas, JSON/DSML parsing). Behavior may differ from native Anthropic tool use.
+- **Reasoning**: `deepseek-reasoner` returns `reasoning_content`.
+- **Context**: advertised window up to **1M tokens** (effective upstream limit applies).
 
-## Limites à connaître
+## Limitations
 
-- Pas de protocole Anthropic natif (`/v1/messages`) dans ce proxy — uniquement OpenAI-compatible (`/v1/chat/completions`).
-- Comptage d’usage agrégé (pas de split prompt/completion côté amont).
-- Débit/pacing et politiques de compte DeepSeek s’appliquent.
+- No native Anthropic protocol (`/v1/messages`) in this proxy — OpenAI-compatible only (`/v1/chat/completions`).
+- Aggregated usage (no prompt/completion split from upstream).
+- Upstream pacing/rate limits and DeepSeek account policies apply.
 
-## Vérification rapide
+## Quick verification
 
 ```bash
 curl http://127.0.0.1:8787/v1/chat/completions \
   -H "Authorization: Bearer public" \
   -H "Content-Type: application/json" \
-  -d '{"model":"deepseek-chat","messages":[{"role":"user","content":"Dis bonjour en une phrase."}]}'
+  -d '{"model":"deepseek-chat","messages":[{"role":"user","content":"Say hello in one sentence."}]}'
 ```

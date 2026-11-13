@@ -1,36 +1,36 @@
 # Windsurf + Free DeepSeek API
 
-[Windsurf](https://codeium.com/windsurf) (Codeium) est un IDE agentique. Il peut, selon les versions/offres, accepter des fournisseurs **OpenAI-compatible**.
+[Windsurf](https://codeium.com/windsurf) (Codeium) is an agentic IDE. Depending on version/plan, it may accept **OpenAI-compatible** providers.
 
 ## Configuration
 
-1. Proxy actif : `http://127.0.0.1:8787/v1` (token valide).
-2. Ouvrez les paramètres de modèles/fournisseurs dans Windsurf :
-   - **Provider type** : OpenAI / OpenAI-compatible (ou « Bring your own key » si disponible)
-   - **Base URL** : `http://127.0.0.1:8787/v1`
-   - **API Key** : `public` (ou votre `API_KEY`)
-   - **Model** : `deepseek-chat` ou `deepseek-reasoner`
-3. (Si demandé) renseignez la fenêtre de contexte : **1 000 000**.
+1. Proxy running: `http://127.0.0.1:8787/v1` (valid token).
+2. Open Windsurf model/provider settings:
+   - **Provider type**: OpenAI / OpenAI-compatible (or "Bring your own key" if available)
+   - **Base URL**: `http://127.0.0.1:8787/v1`
+   - **API Key**: `public` (or your `API_KEY`)
+   - **Model**: `deepseek-chat` or `deepseek-reasoner`
+3. (If requested) set context window: **1,000,000**.
 
-## Recommandations
+## Recommendations
 
-- Préférez `deepseek-chat` pour l’édition/itérations rapides ; `deepseek-reasoner` pour les tâches de raisonnement.
-- Activez le streaming et les outils si les options existent (tool-calling émulé côté proxy).
-- Évitez d’envoyer un contexte inutilement maximal en continu : la latence et le pacing amont augmentent.
+- Prefer `deepseek-chat` for fast edit/iterate loops; `deepseek-reasoner` for reasoning-heavy tasks.
+- Enable streaming and tools if options exist (tool calling is emulated by the proxy).
+- Avoid sending unnecessarily large context continuously: latency and upstream pacing increase.
 
-## Vérification
+## Verification
 
-- `curl http://127.0.0.1:8787/health` doit être `ok` avec au moins un token disponible.
-- Test direct :
+- `curl http://127.0.0.1:8787/health` should be `ok` with at least one token available.
+- Direct test:
 
 ```bash
 curl http://127.0.0.1:8787/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer public" \
-  -d '{"model":"deepseek-chat","messages":[{"role":"user","content":"Réponds: OK"}]}'
+  -d '{"model":"deepseek-chat","messages":[{"role":"user","content":"Reply: OK"}]}'
 ```
 
-## Remarques
+## Notes
 
-- Les fonctionnalités propriétaires Windsurf (cascade interne, certains modes) peuvent ne pas utiliser ce backend. Consultez la doc de votre version pour le chemin exact des réglages BYOK/OpenAI-compatible.
-- En cas d’erreur d’auth côté proxy, alignez la clé client avec `API_KEY` (ou laissez `API_KEY` vide côté proxy).
+- Proprietary Windsurf features (internal cascade, some modes) may not use this backend. Check your version's docs for the exact BYOK/OpenAI-compatible settings path.
+- If you get proxy auth errors, align the client key with server `API_KEY` (or leave `API_KEY` unset on the proxy).

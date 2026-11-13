@@ -1,16 +1,16 @@
-# Codex CLI & CLIs OpenAI-compatibles + Free DeepSeek API
+# Codex CLI & OpenAI-compatible CLIs + Free DeepSeek API
 
-Ce guide couvre les clients en ligne de commande qui parlent le protocole **OpenAI-compatible** (ex. CLIs type Codex/OpenAI, scripts maison, wrappers).
+This guide covers command-line clients that speak the **OpenAI-compatible** protocol (e.g. Codex/OpenAI-style CLIs, custom scripts, wrappers).
 
-## Principe
+## Principle
 
-Configurez le client avec :
+Configure the client with:
 
-- **Base URL** : `http://127.0.0.1:8787/v1`
-- **API Key** : `public` (ou la valeur de `API_KEY`)
-- **Model** : `deepseek-chat` ou `deepseek-reasoner`
+- **Base URL**: `http://127.0.0.1:8787/v1`
+- **API Key**: `public` (or your `API_KEY`)
+- **Model**: `deepseek-chat` or `deepseek-reasoner`
 
-## Variables d’environnement (convention courante)
+## Environment variables (common convention)
 
 ```bash
 export OPENAI_BASE_URL="http://127.0.0.1:8787/v1"
@@ -18,9 +18,9 @@ export OPENAI_API_KEY="public"
 export OPENAI_MODEL="deepseek-chat"
 ```
 
-Certaines CLIs utilisent `OPENAI_API_BASE` au lieu de `OPENAI_BASE_URL` — définissez les deux si besoin.
+Some CLIs use `OPENAI_API_BASE` instead of `OPENAI_BASE_URL` — set both if needed.
 
-## Exemples
+## Examples
 
 ### curl (sanity check)
 
@@ -30,24 +30,24 @@ curl http://127.0.0.1:8787/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "deepseek-chat",
-    "messages": [{"role":"user","content":"Écris une fonction JS qui additionne deux nombres."}]
+    "messages": [{"role":"user","content":"Write a JS function that adds two numbers."}]
   }'
 ```
 
-### OpenAI officiel CLI / wrappers (si installés)
+### OpenAI CLI / wrappers (if installed)
 
 ```bash
-# exemple générique — adaptez à l’outil installé
+# generic example — adapt to your installed tool
 OPENAI_BASE_URL=http://127.0.0.1:8787/v1 OPENAI_API_KEY=public \
-  <votre-cli-openai-compatible> --model deepseek-chat "Refactor this function"
+  <your-openai-compatible-cli> --model deepseek-chat "Refactor this function"
 ```
 
 ### Tool calling
 
-Le proxy émulé supporte `tools`, `tool_choice`, `parallel_tool_calls`. Les clients doivent envoyer/consommer le format OpenAI `tool_calls` standard ; la conversion JSON/DSML est interne au proxy.
+The proxy emulates and supports `tools`, `tool_choice`, `parallel_tool_calls`. Clients should send/consume standard OpenAI `tool_calls`; JSON/DSML conversion is handled internally.
 
-## Bonnes pratiques
+## Best practices
 
-- Contexte annoncé : **1M tokens** — gardez les prompts pertinents pour la latence.
-- En cas de throttling amont, attendez/reduisez la cadence (le proxy applique déjà jitter/gap/cooldown).
-- Pour un usage local multi-outils, définissez `API_KEY` côté proxy et réutilisez la même clé dans vos clients.
+- Advertised context: **1M tokens** — keep prompts relevant for latency.
+- Under upstream throttling, wait/reduce rate (the proxy already applies jitter/gap/cooldown).
+- For local multi-tool usage, set `API_KEY` on the proxy and reuse the same key in clients.
