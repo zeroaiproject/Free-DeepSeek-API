@@ -22,8 +22,12 @@ jobs:
 
       - name: Syntax check
         run: |
+          set -e
           node --check server.js
-          node --check lib/env.js lib/pool.js lib/deepseek.js lib/pow.js lib/stream.js lib/streamgate.js lib/tools.js lib/ratelimit.js lib/warm.js lib/watchdog.js lib/auth.js lib/signup.js lib/captcha.js lib/mailbox.js
+          for f in lib/*.js scripts/*.js; do
+            [ -f "$f" ] || continue
+            node --check "$f"
+          done
 
       - name: Offline tests
         run: npm run test:offline
