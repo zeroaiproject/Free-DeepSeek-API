@@ -110,14 +110,110 @@ const MODELS = [
   { id: 'deepseek-reasoner', object: 'model', created: 1700000000, owned_by: 'deepseek' },
 ];
 
-function send(res, status, obj) {
+const SECURITY_HEADERS = {
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'no-referrer',
+  'Permissions-Policy': 'interest-cohort=()',
+};
+
+function withSecurityHeaders(headers = {}) {
+  return { ...SECURITY_HEADERS, ...headers };
+}
+
+function send(res, status, obj, extraHeaders = {}) {
   const body = JSON.stringify(obj);
-  res.writeHead(status, {
-    'Content-Type': 'application/json',
+  res.writeHead(status, withSecurityHeaders({
+    'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(body),
+    'Cache-Control': 'no-store',
     'Access-Control-Allow-Origin': '*',
-  });
+    ...extraHeaders,
+  }));
   res.end(body);
+}
+
+function sendHtml(res, status, html) {
+  res.writeHead(status, withSecurityHeaders({
+    'Content-Type': 'text/html; charset=utf-8',
+    'Content-Length': Buffer.byteLength(html),
+    'Cache-Control': 'no-store',
+    'Access-Control-Allow-Origin': '*',
+  }));
+  res.end(html);
+}
+
+function safeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const ba = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ba.length !== bb.length) return false;
+  try { return crypto.timingSafeEqual(ba, bb); } catch { return false; }
+}
+
+function wantsHtml(req) {
+  const accept = String(req.headers.accept || '');
+  // Browsers ask for text/html; API clients typically send */* or application/json.
+  return accept.includes('text/html') && !accept.includes('application/json');
+}
+
+function landingPage() {
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const base = '';
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Free DeepSeek API</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b1020; --card:#121a33; --muted:#9fb0d0; --text:#eaf0ff; --accent:#6ee7ff; --accent2:#a78bfa; --ok:#34d399; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background: radial-gradient(1200px 600px at 10% -10%, #18244a 0%, transparent 60%), radial-gradient(900px 500px at 110% 0%, #1a2f4a 0%, transparent 55%), var(--bg); color:var(--text); }
+    .wrap { max-width: 920px; margin: 0 auto; padding: 48px 20px 64px; }
+    .badge { display:inline-block; padding:4px 10px; border:1px solid #2a3a66; border-radius:999px; color:var(--muted); font-size:12px; letter-spacing:.02em; }
+    h1 { margin:14px 0 8px; font-size: clamp(28px, 4vw, 42px); line-height:1.1; }
+    h1 span { background: linear-gradient(90deg,var(--accent),var(--accent2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+    p.lead { margin:0 0 22px; color:var(--muted); font-size:16px; max-width: 70ch; }
+    .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap:14px; margin: 22px 0 26px; }
+    .card { background: linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.01)); border:1px solid #243055; border-radius:14px; padding:16px 16px 14px; }
+    .card h3 { margin:0 0 6px; font-size:14px; color:#d9e6ff; }
+    .card p, .card li { margin:0; color:var(--muted); font-size:13px; line-height:1.5; }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    pre { margin:0; background:#0a1124; border:1px solid #243055; border-radius:14px; padding:14px 16px; overflow:auto; color:#dce7ff; font-size:13px; line-height:1.5; }
+    .k { color:#93c5fd; } .s { color:#86efac; } .p { color:#f9a8d4; } .c { color:#6b7c9e; }
+    .row { display:flex; flex-wrap:wrap; gap:10px; margin-top:10px; }
+    a.pill { text-decoration:none; color:var(--text); border:1px solid #2a3a66; background:#101833; padding:8px 12px; border-radius:10px; font-size:13px; }
+    a.pill:hover { border-color:#3a5294; }
+    .status { color: var(--ok); font-weight:600; }
+    footer { margin-top:28px; color:#6f83a8; font-size:12px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="badge">OpenAI-compatible &middot; v${esc(VERSION)} &middot; <span class="status">running</span></div>
+    <h1><span>Free DeepSeek API</span></h1>
+    <p class="lead">A zero-dependency proxy for <code>chat.deepseek.com</code> exposing <code>/v1/chat/completions</code> with streaming, reasoning, and tool-calling emulation.</p>
+
+    <div class="grid">
+      <div class="card"><h3>Health</h3><p><a class="pill" href="/health">GET /health</a></p></div>
+      <div class="card"><h3>Models</h3><p><a class="pill" href="/v1/models">GET /v1/models</a></p></div>
+      <div class="card"><h3>Chat</h3><p><code>POST /v1/chat/completions</code></p></div>
+    </div>
+
+<pre><span class="c"># quick test</span>
+curl ${esc(base)}http://localhost:${esc(String(PORT))}/v1/chat/completions \
+  -H <span class="s">'Content-Type: application/json'</span> \
+  -d <span class="s">'{"model":"deepseek-chat","messages":[{"role":"user","content":"Hello"}]}'</span></pre>
+
+    <div class="row">
+      <a class="pill" href="https://github.com/zeroaiproject/Free-DeepSeek-API">GitHub</a>
+      <a class="pill" href="/health">Status JSON</a>
+    </div>
+    <footer>Tokens and credentials stay server-side. If <code>API_KEY</code> is set, send <code>Authorization: Bearer &lt;key&gt;</code>.</footer>
+  </div>
+</body>
+</html>`;
 }
 
 function err(res, status, message, type = 'invalid_request_error', code = null) {
@@ -614,15 +710,32 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (API_KEY) {
-    const auth = req.headers.authorization || '';
-    const key = auth.replace(/^Bearer\s+/i, '') || req.headers['x-api-key'];
-    if (key !== API_KEY) return err(res, 401, 'invalid api key', 'authentication_error');
+    const auth = String(req.headers.authorization || '');
+    const bearer = auth.replace(/^Bearer\s+/i, '');
+    const key = bearer || String(req.headers['x-api-key'] || '');
+    if (!safeEqual(key, API_KEY)) return err(res, 401, 'invalid api key', 'authentication_error');
   }
 
   const method = req.method || 'GET';
+  const t0 = Date.now();
+  let loggedStatus = 200;
+  const origWriteHead = res.writeHead.bind(res);
+  res.writeHead = (status, ...rest) => { loggedStatus = status; return origWriteHead(status, ...rest); };
+
+  const done = () => {
+    if (process.env.LOG_REQUESTS === '1') {
+      console.log(`[http] ${method} ${url.pathname} ${loggedStatus} ${Date.now() - t0}ms`);
+    }
+  };
+  res.on('finish', done);
 
   try {
     if ((url.pathname === '/' || url.pathname === '/v1') && (method === 'GET' || method === 'HEAD')) {
+      if (method === 'HEAD') {
+        res.writeHead(200, withSecurityHeaders({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' }));
+        return res.end();
+      }
+      if (wantsHtml(req)) return sendHtml(res, 200, landingPage());
       const info = {
         name: 'Free DeepSeek API',
         version: VERSION,
@@ -635,10 +748,6 @@ const server = http.createServer(async (req, res) => {
         },
         docs: 'https://github.com/zeroaiproject/Free-DeepSeek-API',
       };
-      if (method === 'HEAD') {
-        res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
-        return res.end();
-      }
       return send(res, 200, info);
     }
 
@@ -680,7 +789,9 @@ const server = http.createServer(async (req, res) => {
     }
     return err(res, 404, 'not found', 'invalid_request_error');
   } catch (e) {
-    if (!res.headersSent) return err(res, 500, e.message || 'internal error', 'internal_error');
+    const msg = e && e.message ? e.message : 'internal error';
+    console.error('[http] internal error', msg);
+    if (!res.headersSent) return err(res, 500, 'internal server error', 'internal_error');
     try { res.end(); } catch {}
   }
 });

@@ -130,9 +130,16 @@ node scripts/test-signup.js
 ## Configuration
 
 All optional, read from the environment. A local `.env` file is auto-loaded at
-startup (existing environment variables are not overridden). Keep secrets in
-`.env` / `tokens.txt` — both are gitignored and persisted tokens are written with
-`0600` permissions.
+startup (existing environment variables are not overridden).
+
+**Security & credentials:** keep secrets in `.env` / `tokens.txt` (gitignored);
+persisted tokens are written atomically with `0600` permissions. Set `API_KEY` to
+require clients to send `Authorization: Bearer <key>` (compared in constant time).
+`/health` exposes masked token status for operations — protect it like any
+internal endpoint if the proxy is reachable beyond localhost. Set
+`LOG_REQUESTS=1` for lightweight request logging (method/path/status/latency, no
+bodies or secrets). The server sends basic hardening headers (`nosniff`,
+`X-Frame-Options: DENY`, `no-referrer`, `no-store`).
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
