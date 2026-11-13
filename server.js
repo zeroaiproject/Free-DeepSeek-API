@@ -7,6 +7,7 @@ const crypto = require('crypto');
 
 const { TokenPool } = require('./lib/pool');
 const { complete, ApiError } = require('./lib/deepseek');
+const { login } = require('./lib/auth');
 const { Warmer } = require('./lib/warm');
 const { makeExtractor } = require('./lib/stream');
 const { buildToolInstructions, extractToolCalls, buildTranscript, toolDefs } = require('./lib/tools');
@@ -19,6 +20,35 @@ const DEFAULT_MODEL = process.env.DEFAULT_MODEL || 'deepseek-chat';
 
 const pool = TokenPool.load();
 const warmer = new Warmer();
+
+// Optional automatic re-login: DeepSeek revokes tokens, and a revoked token
+// can be replaced without restarting if the account password is available.
+const DS_EMAIL = process.env.DEEPSEEK_EMAIL || '';
+const DS_PASSWORD = process.env.DEEPSEEK_PASSWORD || '';
+const PERSIST_TOKEN = process.env.DEEPSEEK_TOKEN_PERSIST === '1';
+
+let reloginInFlight = null;
+function relogin(deadToken) {
+  if (!DS_EMAIL || !DS_PASSWORD) return Promise.resolve(null);
+  if (reloginInFlight) return reloginInFlight;
+
+  reloginInFlight = login(DS_EMAIL, DS_PASSWORD)
+    .then((r) => {
+      pool.swap(deadToken, r.token);
+      if (PERSIST_TOKEN) pool.persist();
+      console.log('[auth] token revoked, re-login succeeded');
+      return r.token;
+    })
+    .catch((e) => {
+      console.log('[auth] re-login failed:', e.message);
+      return null;
+    })
+    .finally(() => {
+      reloginInFlight = null;
+    });
+
+  return reloginInFlight;
+}
 
 const MODELS = [
   { id: 'deepseek-chat', object: 'model', created: 1700000000, owned_by: 'deepseek' },
@@ -144,6 +174,8 @@ function classifyPrefix(peek) {
 }
 
 async function handleChat(req, res) {
+  // Pick up a token pasted into tokens.txt without a restart.
+  pool.reloadIfChanged();
   const body = await readBody(req);
   if (process.env.DEBUG_BODY_DIR) {
     try {
@@ -291,7 +323,10 @@ async function handleChat(req, res) {
 
           if (j) {
             lastError = new ApiError(j.code, j.msg, upstream.status);
-            if (isAuthError(lastError)) pool.penalize(token, 300_000);
+            if (isAuthError(lastError)) {
+              pool.penalize(token, 300_000);
+              await relogin(token);
+            }
             continue;
           }
 
@@ -368,7 +403,10 @@ async function handleChat(req, res) {
         } catch {}
         if (j && j.code !== 0) {
           lastError = new ApiError(j.code, j.msg, 200);
-          if (isAuthError(lastError)) pool.penalize(token, 300_000);
+          if (isAuthError(lastError)) {
+            pool.penalize(token, 300_000);
+            await relogin(token);
+          }
           continue;
         }
       }
@@ -427,8 +465,10 @@ async function handleChat(req, res) {
         } catch {}
         return res.end();
       }
-      if (isAuthError(e)) pool.penalize(token, 300_000);
-      else if (e instanceof ApiError && (e.code === 40301 || /INVALID_POW/.test(String(e.msg)))) {
+      if (isAuthError(e)) {
+        pool.penalize(token, 300_000);
+        await relogin(token);
+      } else if (e instanceof ApiError && (e.code === 40301 || /INVALID_POW/.test(String(e.msg)))) {
         warmer.dropChallenges(token);
       } else pool.penalize(token, 1_200);
     }
@@ -458,6 +498,7 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (url.pathname === '/' || url.pathname === '/health') {
+      pool.reloadIfChanged();
       return send(res, 200, {
         status: 'ok',
         tokens: pool.status(),

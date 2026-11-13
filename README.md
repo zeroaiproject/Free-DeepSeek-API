@@ -96,12 +96,64 @@ process manager or `export`).
 | `DEEPSEEK_TOKENS_FILE` | `./tokens.txt` | Extra token file |
 | `WARM_POOL` | `3` | Pre-fetched PoW challenges kept per token (`0` disables) |
 | `WARM_SESSION_USES` | `100` | Reuse a session this many times before rotating |
+| `DEEPSEEK_PROXY` | — | Route upstream calls through `http://[user:pass@]host:port` |
+| `DEEPSEEK_EMAIL` | — | Account email, enables automatic re-login |
+| `DEEPSEEK_PASSWORD` | — | Account password, enables automatic re-login |
+| `DEEPSEEK_TOKEN_PERSIST` | — | `1` writes a re-login token back to `tokens.txt` |
 | `DEBUG_BODY_DIR` | — | Dump each incoming request body there (debugging) |
 
 Multiple tokens are load-balanced round-robin. A token that returns
 `INVALID_TOKEN` is benched with exponential backoff and the request is retried
 on the next token. When every token is cooling down the request waits up to 2 s
 for the soonest one instead of failing immediately.
+
+`tokens.txt` is watched: paste a new token and the running server picks it up on
+the next request, no restart needed.
+
+---
+
+## Token lifetime
+
+DeepSeek revokes web tokens aggressively. Two causes, in order of importance:
+
+**1. Datacenter IPs.** A token issued from a residential connection and used
+from a hosting provider (OVH, Hetzner, AWS…) is killed within minutes — and the
+account gets logged out of the browser too. You can check whether an IP is
+flagged before blaming the token:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://chat.deepseek.com/
+```
+
+`202` with an empty body means the anti-bot gate is up for that IP; a normal IP
+gets `200` and the app HTML.
+
+Route the upstream through a clean IP:
+
+```bash
+DEEPSEEK_PROXY=http://user:pass@residential-proxy:8080 node server.js
+```
+
+Every upstream call then goes through a `CONNECT` tunnel, so DeepSeek sees the
+proxy's address. Verified working (the TLS handshake and the API response come
+back through the tunnel unchanged).
+
+**2. Session rotation.** Logging in again, or refreshing the web app in a way
+that mints a new token, invalidates the old one. Keep the tab closed after
+copying the token.
+
+If the account has a password, let the proxy repair itself:
+
+```bash
+DEEPSEEK_EMAIL=you@example.com \
+DEEPSEEK_PASSWORD=… \
+DEEPSEEK_TOKEN_PERSIST=1 \
+node server.js
+```
+
+On a `40003 INVALID_TOKEN` the server logs in again, swaps the token in the
+pool, optionally rewrites `tokens.txt`, and retries the request. One re-login is
+shared by all concurrent requests.
 
 ---
 
@@ -436,9 +488,10 @@ lib/deepseek.js               chat.deepseek.com client (challenge, session, comp
 lib/pow.js                    DeepSeekHash WASM wrapper
 lib/stream.js                 SSE fragment assembler
 lib/tools.js                  tool-call emulation, JSON + DSML parsers
-lib/pool.js                   round-robin token pool with cooldown
+lib/pool.js                   round-robin token pool, hot reload, re-login swap
+lib/auth.js                   email+password login (also used for auto re-login)
 lib/sha3_wasm_bg.*.wasm       original PoW module
-scripts/login.js              email+password -> userToken
+scripts/login.js              email+password -> userToken (CLI wrapper)
 scripts/pow-selftest.js       offline PoW vector test
 scripts/test-parsers.js       offline tool-call parser tests
 scripts/test-tools.js         end-to-end tool-calling tests
