@@ -1,18 +1,26 @@
 'use strict';
 // Latency + throughput benchmark for the Free DeepSeek API proxy.
 //
-//   node scripts/bench.js [runs] [short|long] [model]
+//   node scripts/bench.js [runs] [short|long] [model] [--json]
+//   BASE_URL=http://127.0.0.1:8787 BENCH_DELAY_MS=3000 node scripts/bench.js
 //
-// Reports per-run TTFT, decode throughput (tokens/s after the first token) and
-// wall throughput, plus the proxy's internal breakdown from the X-Ds-* headers.
+// Reports TTFT, decode/wall throughput, token rates, proxy prep breakdown,
+// and latency percentiles. Measures sequential sustained rate (requests/min)
+// including pacing — useful to validate safe operating points.
+
+const args = process.argv.slice(2);
+const jsonOut = args.includes('--json');
+const pos = args.filter((a) => a !== '--json');
 
 const BASE = process.env.BASE_URL || 'http://127.0.0.1:8787';
-const RUNS = Number(process.argv[2] || 5);
-const PROFILE = process.argv[3] || 'short';
-const MODEL = process.argv[4] || 'deepseek-chat';
-// DeepSeek silently returns an empty answer when requests are fired too fast.
+const RUNS = Number(pos[0] || 5);
+const PROFILE = pos[1] || 'short';
+const MODEL = pos[2] || 'deepseek-chat';
 const DELAY_MS = Number(process.env.BENCH_DELAY_MS || 3000);
+const TIMEOUT_MS = Number(process.env.BENCH_TIMEOUT_MS || 180000);
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const now = () => Number(process.hrtime.bigint()) / 1e6;
 
 const PROMPTS = {
   short: 'Réponds en une seule phrase courte : qu\'est-ce qu\'un proxy ?',
@@ -21,37 +29,72 @@ const PROMPTS = {
     'environ 60 mots par paragraphe. Pas de conclusion, pas de titre.',
 };
 
-const now = () => Number(process.hrtime.bigint()) / 1e6;
-
 function stats(values) {
-  const v = [...values].sort((a, b) => a - b);
+  const v = values.filter((x) => Number.isFinite(x)).sort((a, b) => a - b);
   const n = v.length;
+  if (!n) return null;
   const sum = v.reduce((a, b) => a + b, 0);
-  const q = (p) => v[Math.min(n - 1, Math.max(0, Math.floor(p * (n - 1))))];
+  const mean = sum / n;
+  const variance = v.reduce((a, b) => a + (b - mean) ** 2, 0) / n;
+  const q = (p) => v[Math.min(n - 1, Math.max(0, Math.ceil(p * n) - 1))];
   return {
+    n,
     min: v[0],
-    median: q(0.5),
-    mean: sum / n,
+    p50: q(0.5),
+    p90: q(0.9),
     p95: q(0.95),
+    p99: q(0.99),
     max: v[n - 1],
+    mean,
+    stdev: Math.sqrt(variance),
   };
+}
+
+function fmt(ms) {
+  if (!Number.isFinite(ms)) return '-';
+  return ms >= 1000 ? (ms / 1000).toFixed(2) + ' s' : ms.toFixed(0) + ' ms';
+}
+function fnum(v, d = 1) {
+  return Number.isFinite(v) ? v.toFixed(d) : '-';
+}
+
+async function fetchHealth() {
+  try {
+    const r = await fetch(`${BASE}/health`, { signal: AbortSignal.timeout(5000) });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch {
+    return null;
+  }
 }
 
 async function runOnce(prompt) {
   const t0 = now();
-  const res = await fetch(`${BASE}/v1/chat/completions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: MODEL,
-      stream: true,
-      stream_options: { include_usage: true },
-      messages: [{ role: 'user', content: prompt }],
-    }),
-  });
+  const controller = new AbortController();
+  const to = setTimeout(() => controller.abort(new Error('bench timeout')), TIMEOUT_MS);
+  let res;
+  try {
+    res = await fetch(`${BASE}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: MODEL,
+        stream: true,
+        stream_options: { include_usage: true },
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+  } finally {
+    clearTimeout(to);
+  }
   const tHeaders = now();
 
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+  if (!res.ok) {
+    let msg = '';
+    try { msg = await res.text(); } catch {}
+    throw new Error(`HTTP ${res.status}: ${msg.slice(0, 200)}`);
+  }
 
   const h = res.headers;
   const internal = {
@@ -87,11 +130,7 @@ async function runOnce(prompt) {
       if (payload === '[DONE]') continue;
 
       let j;
-      try {
-        j = JSON.parse(payload);
-      } catch {
-        continue;
-      }
+      try { j = JSON.parse(payload); } catch { continue; }
       if (j.usage && typeof j.usage.completion_tokens === 'number') {
         tokens = j.usage.completion_tokens;
         continue;
@@ -108,11 +147,12 @@ async function runOnce(prompt) {
   }
 
   const tEnd = now();
-  const decodeMs = ttft === null ? 0 : tLast - (t0 + ttft);
+  const decodeMs = ttft === null ? 0 : Math.max(0, tLast - (t0 + ttft));
 
   return {
-    ttft: ttft ?? 0,
-    total: tEnd - t0,
+    ok: true,
+    ttftMs: ttft ?? 0,
+    totalMs: tEnd - t0,
     headersMs: tHeaders - t0,
     tokens,
     chars,
@@ -124,8 +164,13 @@ async function runOnce(prompt) {
   };
 }
 
-function fmt(ms) {
-  return ms >= 1000 ? (ms / 1000).toFixed(2) + ' s' : ms.toFixed(0) + ' ms';
+function printTable(title, s, unit, fmtVal) {
+  if (!s) return;
+  const p = fmtVal || ((v) => fnum(v, 1));
+  console.log(`\n— ${title} —`);
+  console.log(
+    `  n=${s.n}  min ${p(s.min)}  p50 ${p(s.p50)}  p90 ${p(s.p90)}  p95 ${p(s.p95)}  p99 ${p(s.p99)}  max ${p(s.max)}  mean ${p(s.mean)}  stdev ${p(s.stdev)} ${unit || ''}`.trimEnd()
+  );
 }
 
 (async () => {
@@ -135,74 +180,121 @@ function fmt(ms) {
     process.exit(2);
   }
 
-  console.log(`\nFree DeepSeek API — benchmark`);
-  console.log(`  endpoint : ${BASE}/v1/chat/completions`);
-  console.log(`  model    : ${MODEL}`);
-  console.log(`  profile  : ${PROFILE} (${RUNS} runs)\n`);
+  const startedAt = Date.now();
+  const healthBefore = await fetchHealth();
 
-  // warm-up: first call pays for WASM instantiation + TLS, report it separately
-  const warm = await runOnce(prompt);
-  console.log(
-    `warm-up  ttft ${fmt(warm.ttft)}  total ${fmt(warm.total)}  tokens ${warm.tokens}  ` +
-      `pool ${warm.decodeTps.toFixed(1)} tok/s\n`
-  );
+  if (!jsonOut) {
+    console.log(`\nFree DeepSeek API — benchmark`);
+    console.log(`  endpoint : ${BASE}/v1/chat/completions`);
+    console.log(`  model    : ${MODEL}`);
+    console.log(`  profile  : ${PROFILE} (${RUNS} runs, delay ${DELAY_MS}ms, timeout ${TIMEOUT_MS}ms)`);
+    if (healthBefore && healthBefore.rate) {
+      const rc = Array.isArray(healthBefore.rate) ? null : healthBefore.rate.config;
+      if (rc) console.log(`  limiter  : burst=${rc.burst} refill=${rc.refillMs}ms gap=${rc.minGapMs}ms jitter=${rc.jitterMs}ms`);
+    }
+    console.log('');
+  }
+
+  // warm-up
+  let warm = null;
+  try {
+    warm = await runOnce(prompt);
+    if (!jsonOut) {
+      console.log(
+        `warm-up  ttft ${fmt(warm.ttftMs)}  total ${fmt(warm.totalMs)}  tokens ${warm.tokens}  decode ${fnum(warm.decodeTps)} tok/s`
+      );
+    }
+  } catch (e) {
+    if (!jsonOut) console.log(`warm-up  failed: ${e.message}`);
+  }
   await sleep(DELAY_MS);
 
   const runs = [];
-  for (let i = 1; i <= RUNS; i++) {
-    let r = await runOnce(prompt);
+  let emptyCount = 0;
+  let errorCount = 0;
 
-    // Rate-limited answers come back empty with no error. Retry once, slower.
-    for (let retry = 0; r.tokens === 0 && retry < 2; retry++) {
-      console.log(`#${i}  empty answer (upstream rate limit) — backing off 20s`);
-      await sleep(20000);
+  for (let i = 1; i <= RUNS; i++) {
+    let r;
+    try {
       r = await runOnce(prompt);
+    } catch (e) {
+      errorCount++;
+      if (!jsonOut) console.log(`#${i}  ERROR ${e.message}`);
+      if (i < RUNS) await sleep(DELAY_MS);
+      continue;
     }
-    if (r.tokens === 0) {
-      console.log(`#${i}  still empty, skipping`);
+
+    for (let retry = 0; r.tokens === 0 && retry < 2; retry++) {
+      emptyCount++;
+      if (!jsonOut) console.log(`#${i}  empty answer (upstream throttle) — backing off 20s`);
+      await sleep(20000);
+      try { r = await runOnce(prompt); } catch (e) { r = { tokens: 0, error: e.message }; break; }
+    }
+
+    if (!r || r.tokens === 0) {
+      if (!jsonOut) console.log(`#${i}  still empty, skipping`);
+      if (i < RUNS) await sleep(DELAY_MS);
       continue;
     }
 
     runs.push(r);
-    console.log(
-      `#${i}  ttft ${fmt(r.ttft).padStart(8)}  total ${fmt(r.total).padStart(8)}  ` +
-        `tok ${String(r.tokens).padStart(4)}  decode ${r.decodeTps.toFixed(1).padStart(6)} tok/s  ` +
-        `wall ${r.wallTps.toFixed(1).padStart(6)} tok/s  ` +
-        `[prep ${r.internal.prepMs}ms = max(sess ${r.internal.sessionMs}, chal ${r.internal.challengeMs}) + solve ${r.internal.solveMs} | upstream-ttfb ${r.internal.upstreamTtfbMs}ms]`
-    );
+    if (!jsonOut) {
+      console.log(
+        `#${i}  ttft ${fmt(r.ttftMs).padStart(8)}  total ${fmt(r.totalMs).padStart(8)}  ` +
+          `tok ${String(r.tokens).padStart(4)}  decode ${fnum(r.decodeTps).padStart(6)} tok/s  ` +
+          `wall ${fnum(r.wallTps).padStart(6)} tok/s  ` +
+          `[prep ${r.internal.prepMs}ms = max(sess ${r.internal.sessionMs}, chal ${r.internal.challengeMs}) + solve ${r.internal.solveMs} | upstream-ttfb ${r.internal.upstreamTtfbMs}ms]`
+      );
+    }
     if (i < RUNS) await sleep(DELAY_MS);
   }
 
-  if (!runs.length) {
-    console.error('\nno measurable runs — upstream is rate limiting');
-    process.exit(1);
-  }
-
-  const pick = (f) => runs.map(f);
-  const ttft = stats(pick((r) => r.ttft));
-  const total = stats(pick((r) => r.total));
+  const wallClockMs = Date.now() - startedAt;
+  const pick = (f) => runs.map(f).filter(Number.isFinite);
+  const ttft = stats(pick((r) => r.ttftMs));
+  const total = stats(pick((r) => r.totalMs));
   const dec = stats(pick((r) => r.decodeTps));
   const wall = stats(pick((r) => r.wallTps));
   const tok = stats(pick((r) => r.tokens));
+  const prep = stats(pick((r) => r.internal.prepMs));
+  const uttfb = stats(pick((r) => r.internal.upstreamTtfbMs));
 
-  const row = (label, s, unit = 'ms', p = fmt) =>
-    `${label.padEnd(12)} min ${p(s.min)}  med ${p(s.median)}  mean ${p(s.mean)}  p95 ${p(s.p95)}  max ${p(s.max)}`;
+  const sumTokens = runs.reduce((a, r) => a + (r.tokens || 0), 0);
+  const sumTotalMs = runs.reduce((a, r) => a + (r.totalMs || 0), 0);
+  const measuredMs = Math.max(1, wallClockMs);
+  const sustained = {
+    measured_runs: runs.length,
+    errors: errorCount,
+    empty_retries: emptyCount,
+    wall_clock_ms: Math.round(measuredMs),
+    requests_per_min: Number((runs.length / (measuredMs / 60000)).toFixed(2)),
+    tokens_per_min: Number((sumTokens / (measuredMs / 60000)).toFixed(2)),
+    tokens_per_sec_wallclock: Number((sumTokens / (measuredMs / 1000)).toFixed(2)),
+    avg_tokens_per_sec_request: sumTotalMs > 0 ? Number((sumTokens / (sumTotalMs / 1000)).toFixed(2)) : 0,
+  };
 
-  console.log('\n— TTFT (client → first content token) —');
-  console.log('  ' + row('ttft', ttft));
-  console.log('\n— Tokens per second —');
-  console.log('  ' + row('decode', dec, 'tok/s', (v) => v.toFixed(1)));
-  console.log('  ' + row('wall', wall, 'tok/s', (v) => v.toFixed(1)));
-  console.log('\n— End to end —');
-  console.log('  ' + row('total', total));
-  console.log('  ' + row('tokens', tok, 'tok', (v) => v.toFixed(0)));
+  if (jsonOut) {
+    console.log(JSON.stringify({ base: BASE, model: MODEL, profile: PROFILE, runs: RUNS, delayMs: DELAY_MS, warm, results: runs, stats: { ttft, total, decodeTps: dec, wallTps: wall, tokens: tok, prepMs: prep, upstreamTtfbMs: uttfb }, sustained }, null, 2));
+    process.exit(runs.length ? 0 : 1);
+  }
 
-  const overhead = stats(pick((r) => r.internal.prepMs));
-  console.log('\n— Proxy overhead before upstream request —');
-  console.log('  ' + row('prep', overhead));
-  console.log(
-    `\nmedian decode throughput: ${dec.median.toFixed(1)} tok/s   median TTFT: ${fmt(ttft.median)}`
-  );
+  if (!runs.length) {
+    console.error('\nno measurable runs — upstream is rate limiting or unavailable');
+    process.exit(1);
+  }
+
+  printTable('TTFT (client → first token)', ttft, 'ms', fmt);
+  printTable('End to end', total, 'ms', fmt);
+  printTable('Decode throughput', dec, 'tok/s');
+  printTable('Wall throughput (per request)', wall, 'tok/s');
+  printTable('Tokens per response', tok, 'tok', (v) => fnum(v, 0));
+  printTable('Proxy prep before upstream', prep, 'ms', fmt);
+  printTable('Upstream TTFB', uttfb, 'ms', fmt);
+
+  console.log('\n— Sustained rate (measured, incl. pacing/delays) —');
+  console.log(`  runs ${sustained.measured_runs}/${RUNS}  errors ${sustained.errors}  empty-retries ${sustained.empty_retries}  wall ${fmt(sustained.wall_clock_ms)}`);
+  console.log(`  requests/min ${sustained.requests_per_min}  tokens/min ${sustained.tokens_per_min}  tokens/s (wallclock) ${sustained.tokens_per_sec_wallclock}  tokens/s (sum of requests) ${sustained.avg_tokens_per_sec_request}`);
+  console.log(`\nmedian decode throughput: ${fnum(dec.p50)} tok/s   median TTFT: ${fmt(ttft.p50)}`);
 })().catch((e) => {
   console.error('\nbenchmark failed:', e.message);
   process.exit(1);
