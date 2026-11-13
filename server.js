@@ -276,6 +276,16 @@ function isAuthError(e) {
   return e.code === 40003 || e.code === 40002 || /INVALID_TOKEN|Missing Token|TOKEN/i.test(String(e.msg));
 }
 
+function isTransientError(e) {
+  if (!e) return false;
+  if (e instanceof ApiError) {
+    if ([429, 500, 502, 503, 504].includes(Number(e.httpStatus))) return true;
+    if (/EMPTY_ANSWER|RATE_LIMITED|HTTP_5\d\d/.test(String(e.code))) return true;
+  }
+  const msg = String(e.message || e.code || e);
+  return /ECONNRESET|ETIMEDOUT|EPIPE|ENOTFOUND|EAI_AGAIN|socket hang up|timeout|network|temporar|TLS|CONNECT/i.test(msg);
+}
+
 function chunk(id, model, delta, finish = null) {
   return {
     id,
@@ -404,7 +414,7 @@ async function handleChat(req, res, opts = {}) {
 
   // A single token is normal, so retries must not be capped by pool size:
   // one upstream failure should not turn into an immediate 503.
-  const MAX_ATTEMPTS = 4;
+  const MAX_ATTEMPTS = 5;
   const MAX_WAIT_MS = 2_000;
   const MAX_RATE_WAIT_MS = Number(process.env.RATE_MAX_WAIT_MS || 35_000);
   let lastError = null;
@@ -731,7 +741,12 @@ async function handleChat(req, res, opts = {}) {
         await relogin(token);
       } else if (e instanceof ApiError && (e.code === 40301 || /INVALID_POW/.test(String(e.msg)))) {
         warmer.dropChallenges(token);
-      } else pool.penalize(token, 1_200);
+      } else if (isTransientError(e)) {
+        warmer.dropChallenges(token);
+        pool.penalize(token, 800);
+      } else {
+        pool.penalize(token, 1_200);
+      }
     }
   }
 
@@ -789,7 +804,7 @@ async function handleAnthropicMessages(req, res) {
     return anthropicErr(res, 400, e.message);
   }
 
-  const MAX_ATTEMPTS = 4;
+  const MAX_ATTEMPTS = 5;
   const MAX_WAIT_MS = 2_000;
   const MAX_RATE_WAIT_MS = Number(process.env.RATE_MAX_WAIT_MS || 35_000);
   let lastError = null;
@@ -983,6 +998,7 @@ async function handleAnthropicMessages(req, res) {
       if (res.headersSent) { try { res.end(); } catch {} return; }
       if (isAuthError(e)) { pool.penalize(token, 300_000); await relogin(token); }
       else if (e instanceof ApiError && (e.code === 40301 || /INVALID_POW/.test(String(e.msg)))) { warmer.dropChallenges(token); }
+      else if (isTransientError(e)) { warmer.dropChallenges(token); pool.penalize(token, 800); }
       else pool.penalize(token, 1_200);
     }
   }
@@ -1031,7 +1047,7 @@ async function handleVertexGenerate(req, res, modelFromPath, stream) {
     prompt = toolsActive ? `System: ${buildToolInstructions(oai.tools, 'auto')}\n\n${transcript}` : transcript;
   } catch (e) { return vertexErr(res, 400, e.message); }
 
-  const MAX_ATTEMPTS = 4;
+  const MAX_ATTEMPTS = 5;
   const MAX_WAIT_MS = 2_000;
   const MAX_RATE_WAIT_MS = Number(process.env.RATE_MAX_WAIT_MS || 35_000);
   let lastError = null;
@@ -1148,6 +1164,7 @@ async function handleVertexGenerate(req, res, modelFromPath, stream) {
       if (res.headersSent) { try { res.end(); } catch {} return; }
       if (isAuthError(e)) { pool.penalize(token, 300_000); await relogin(token); }
       else if (e instanceof ApiError && (e.code === 40301 || /INVALID_POW/.test(String(e.msg)))) { warmer.dropChallenges(token); }
+      else if (isTransientError(e)) { warmer.dropChallenges(token); pool.penalize(token, 800); }
       else pool.penalize(token, 1_200);
     }
   }
@@ -1202,7 +1219,7 @@ const server = http.createServer(async (req, res) => {
   res.on('close', () => { if (!res.writableEnded) endMetrics(); });
 
   try {
-    if ((url.pathname === '/' || url.pathname === '/v1') && (method === 'GET' || method === 'HEAD')) {
+    if ((url.pathname === '/' || url.pathname === '/v1' || url.pathname === '/openai/v1') && (method === 'GET' || method === 'HEAD')) {
       if (method === 'HEAD') {
         res.writeHead(200, withSecurityHeaders({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' }));
         return res.end();
@@ -1213,11 +1230,17 @@ const server = http.createServer(async (req, res) => {
         version: VERSION,
         status: 'ok',
         openai_compatible: true,
+        anthropic_compatible: true,
+        vertex_compatible: true,
         endpoints: {
           health: '/health',
+          live: '/livez',
+          ready: '/readyz',
+          version: '/version',
           metrics: '/metrics',
           models: '/v1/models',
           chat: '/v1/chat/completions',
+          completions: '/v1/completions',
           anthropic_messages: '/v1/messages',
           vertex_generate: '/v1beta/models/{model}:generateContent',
           vertex_stream: '/v1beta/models/{model}:streamGenerateContent',
@@ -1225,6 +1248,28 @@ const server = http.createServer(async (req, res) => {
         docs: 'https://github.com/zeroaiproject/Free-DeepSeek-API',
       };
       return send(res, 200, info);
+    }
+
+    if ((url.pathname === '/version') && (method === 'GET' || method === 'HEAD')) {
+      const body = { name: 'free-deepseek-api', version: VERSION };
+      if (method === 'HEAD') { res.writeHead(200, withSecurityHeaders({ 'Content-Type': 'application/json; charset=utf-8' })); return res.end(); }
+      return send(res, 200, body);
+    }
+
+    if ((url.pathname === '/livez' || url.pathname === '/healthz') && (method === 'GET' || method === 'HEAD')) {
+      const body = { status: 'ok', uptime_s: Math.floor((Date.now() - STARTED_AT) / 1000) };
+      if (method === 'HEAD') { res.writeHead(200, withSecurityHeaders({ 'Content-Type': 'application/json; charset=utf-8' })); return res.end(); }
+      return send(res, 200, body);
+    }
+
+    if (url.pathname === '/readyz' && (method === 'GET' || method === 'HEAD')) {
+      pool.reloadIfChanged();
+      const ready = pool.size > 0 || !!(DS_EMAIL && DS_PASSWORD);
+      const suspended = suspendedUntil > Date.now() && pool.size === 0;
+      const status = ready && !suspended ? 200 : 503;
+      const body = { status: status === 200 ? 'ready' : 'not_ready', tokens: pool.size, suspended: suspended || undefined };
+      if (method === 'HEAD') { res.writeHead(status, withSecurityHeaders({ 'Content-Type': 'application/json; charset=utf-8' })); return res.end(); }
+      return send(res, status, body);
     }
 
     if (url.pathname === '/health' && (method === 'GET' || method === 'HEAD')) {
@@ -1253,9 +1298,12 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, body);
     }
 
-    if (url.pathname === '/metrics' && method === 'GET') {
+    if (url.pathname === '/metrics' && (method === 'GET' || method === 'HEAD')) {
       const accept = String(req.headers.accept || '');
-      if (accept.includes('application/json')) return send(res, 200, metrics.snapshot());
+      if (accept.includes('application/json')) {
+        if (method === 'HEAD') { res.writeHead(200, withSecurityHeaders({ 'Content-Type': 'application/json; charset=utf-8' })); return res.end(); }
+        return send(res, 200, metrics.snapshot());
+      }
       const body = metrics.prometheus();
       res.writeHead(200, withSecurityHeaders({
         'Content-Type': 'text/plain; version=0.0.4; charset=utf-8',
@@ -1263,10 +1311,11 @@ const server = http.createServer(async (req, res) => {
         'Cache-Control': 'no-store',
         'Access-Control-Allow-Origin': '*',
       }));
+      if (method === 'HEAD') return res.end();
       return res.end(body);
     }
 
-    if (url.pathname === '/v1/models' && method === 'GET') {
+    if ((url.pathname === '/v1/models' || url.pathname === '/openai/v1/models') && method === 'GET') {
       const data = MODELS.map((m) => {
         const reasoner = m.id.includes('reasoner');
         return {
@@ -1283,25 +1332,72 @@ const server = http.createServer(async (req, res) => {
       return await handleChat(req, res);
     }
 
+    // Legacy/completions shim -> chat (best-effort)
+    if ((url.pathname === '/v1/completions' || url.pathname === '/completions') && method === 'POST') {
+      let body;
+      try { body = await readBody(req); } catch { return err(res, 400, 'invalid JSON body', 'invalid_request_error'); }
+      const prompt = typeof body?.prompt === 'string' ? body.prompt : Array.isArray(body?.prompt) ? body.prompt.join('\n') : String(body?.prompt ?? '');
+      const chatBody = {
+        model: body?.model || DEFAULT_MODEL,
+        messages: [{ role: 'user', content: prompt }],
+        stream: !!body?.stream,
+        temperature: body?.temperature,
+        max_tokens: body?.max_tokens,
+      };
+      return await handleChat(req, res, { body: chatBody });
+    }
+
     // Anthropic Messages API compatibility
     if ((url.pathname === '/v1/messages' || url.pathname === '/messages') && method === 'POST') {
       return await handleAnthropicMessages(req, res);
+    }
+    // Anthropic token count stub (best-effort approximation)
+    if ((url.pathname === '/v1/messages/count_tokens' || url.pathname === '/messages/count_tokens') && method === 'POST') {
+      let body; try { body = await readBody(req); } catch { body = {}; }
+      const text = JSON.stringify(body?.messages || body || '').length;
+      return send(res, 200, { input_tokens: Math.max(1, Math.ceil(text / 4)) });
     }
 
     // Google Vertex / Gemini API compatibility
     // Matches: /v1beta/models/{model}:generateContent, /v1/models/{model}:generateContent,
     // /v1/projects/.../locations/.../publishers/google/models/{model}:generateContent (and stream variants)
-    const vertexMatch = url.pathname.match(/\/models\/([^/:]+):(generateContent|streamGenerateContent)$/);
+    const vertexMatch = url.pathname.match(/\/models\/([^/:]+):(generateContent|streamGenerateContent|countTokens)$/);
     if (vertexMatch && method === 'POST') {
       const modelFromPath = decodeURIComponent(vertexMatch[1] || '');
-      const stream = vertexMatch[2] === 'streamGenerateContent' || url.searchParams.get('alt') === 'sse';
+      const action = vertexMatch[2];
+      if (action === 'countTokens') {
+        let body; try { body = await readBody(req); } catch { body = {}; }
+        const text = JSON.stringify(body?.contents || body || '').length;
+        return send(res, 200, { totalTokens: Math.max(1, Math.ceil(text / 4)) });
+      }
+      const stream = action === 'streamGenerateContent' || url.searchParams.get('alt') === 'sse';
       return await handleVertexGenerate(req, res, modelFromPath, stream);
     }
 
+    // Common OpenAI-compatible aliases / unsupported-but-graceful endpoints
+    if (method === 'GET' && /^\/v1\/models\/[^/]+$/.test(url.pathname)) {
+      const id = decodeURIComponent(url.pathname.split('/').pop() || '');
+      const found = MODELS.find((m) => m.id === id);
+      if (!found) return err(res, 404, `model '${id}' not found`, 'invalid_request_error', 'model_not_found');
+      const reasoner = id.includes('reasoner');
+      return send(res, 200, { ...found, context_window: 1_000_000, max_output_tokens: reasoner ? 32768 : 8192, capabilities: { tools: true, streaming: true, reasoning: reasoner, vision: false } });
+    }
+
+    if (method === 'POST' && /^\/v1\/(embeddings|images\/generations|audio\/(transcriptions|translations|speech)|responses|moderations|batches|files|fine_tuning\/jobs)/.test(url.pathname)) {
+      return err(res, 501, `Endpoint '${url.pathname}' is not supported by this proxy. Supported: /v1/chat/completions, /v1/messages, Vertex :generateContent.`, 'not_supported_error', 'unsupported_endpoint');
+    }
+    if (method === 'GET' && /^\/v1\/(files|batches|fine_tuning\/jobs|models)$/.test(url.pathname)) {
+      // /v1/models handled above; other collection reads -> empty/unsupported
+      if (url.pathname !== '/v1/models') return err(res, 501, `Endpoint '${url.pathname}' is not supported by this proxy.`, 'not_supported_error', 'unsupported_endpoint');
+    }
+
     if (method !== 'GET' && method !== 'POST' && method !== 'HEAD') {
+      res.setHeader('Allow', 'GET, POST, HEAD, OPTIONS');
       return err(res, 405, 'method not allowed', 'invalid_request_error');
     }
-    return err(res, 404, 'not found', 'invalid_request_error');
+
+    res.setHeader('Allow', 'GET, POST, HEAD, OPTIONS');
+    return err(res, 404, `not found: ${method} ${url.pathname}`, 'invalid_request_error', 'not_found');
   } catch (e) {
     const msg = e && e.message ? e.message : 'internal error';
     console.error('[http] internal error', msg);

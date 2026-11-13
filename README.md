@@ -180,14 +180,22 @@ This includes handling snapshot/append/replace-style updates from the web protoc
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/`, `/v1` | Service info (HTML for browsers, JSON for clients) |
-| `GET` | `/health` | Health, uptime, tokens (masked), warm/rate/watchdog/auth, metrics |
+| `GET` | `/`, `/v1`, `/openai/v1` | Service info (HTML for browsers, JSON for clients) |
+| `GET` | `/version` | Service name/version |
+| `GET` | `/health` | Detailed health/status (tokens masked), warm/rate/watchdog/auth/metrics |
+| `GET` | `/livez`, `/healthz` | Liveness probe |
+| `GET` | `/readyz` | Readiness probe (tokens/auth availability) |
 | `GET` | `/metrics` | Prometheus (`text/plain`) or JSON (`Accept: application/json`) |
 | `GET` | `/v1/models` | Models and capabilities |
+| `GET` | `/v1/models/{id}` | Single model details |
 | `POST` | `/v1/chat/completions` | OpenAI-compatible chat completions (stream/non-stream), `tools` |
+| `POST` | `/v1/completions` | Legacy completions shim (mapped to chat) |
 | `POST` | `/v1/messages` | Anthropic Messages API compatible (stream/non-stream), tools |
+| `POST` | `/v1/messages/count_tokens` | Anthropic token-count stub (best-effort estimate) |
 | `POST` | `/v1beta/models/{model}:generateContent` | Vertex/Gemini `generateContent` compatible |
 | `POST` | `/v1beta/models/{model}:streamGenerateContent` | Vertex/Gemini `streamGenerateContent` compatible (SSE) |
+| `POST` | `/v1beta/models/{model}:countTokens` | Vertex token-count stub (best-effort estimate) |
+| `POST` | `/v1/embeddings`, `/v1/images/*`, `/v1/audio/*`, ... | Explicit `501 not supported` responses (graceful fallback) |
 
 ### 🧱 Models
 
