@@ -18,6 +18,7 @@ const { makeExtractor } = require('./lib/stream');
 const { StreamGate } = require('./lib/streamgate');
 const { buildToolInstructions, extractToolCalls, buildTranscript, toolDefs } = require('./lib/tools');
 const { init: initPow } = require('./lib/pow');
+const { Metrics } = require('./lib/metrics');
 
 const pkg = (() => { try { return require('./package.json'); } catch { return {}; } })();
 const VERSION = pkg.version || '0.0.0';
@@ -30,6 +31,7 @@ const DEFAULT_MODEL = process.env.DEFAULT_MODEL || 'deepseek-chat';
 
 const pool = TokenPool.load();
 const warmer = new Warmer();
+const metrics = new Metrics();
 const limiter = new RateLimiter({
   burst: Number(process.env.RATE_BURST || 6),
   refillMs: Number(process.env.RATE_REFILL_MS || 5000),
@@ -201,6 +203,7 @@ function landingPage() {
 
     <div class="grid">
       <div class="card"><h3>Health</h3><p><a class="pill" href="/health">GET /health</a></p></div>
+      <div class="card"><h3>Metrics</h3><p><a class="pill" href="/metrics">GET /metrics</a></p></div>
       <div class="card"><h3>Models</h3><p><a class="pill" href="/v1/models">GET /v1/models</a></p></div>
       <div class="card"><h3>Chat</h3><p><code>POST /v1/chat/completions</code></p></div>
     </div>
@@ -733,15 +736,25 @@ const server = http.createServer(async (req, res) => {
 
   const t0 = Date.now();
   let loggedStatus = 200;
+  let metricsEnded = false;
   const origWriteHead = res.writeHead.bind(res);
   res.writeHead = (status, ...rest) => { loggedStatus = status; return origWriteHead(status, ...rest); };
 
+  metrics.onRequestStart();
+  const endMetrics = () => {
+    if (metricsEnded) return;
+    metricsEnded = true;
+    metrics.onRequestEnd({ status: loggedStatus, durationMs: Date.now() - t0 });
+  };
+
   const done = () => {
+    endMetrics();
     if (process.env.LOG_REQUESTS === '1') {
       console.log(`[http] ${rid.slice(0, 8)} ${method} ${url.pathname} ${loggedStatus} ${Date.now() - t0}ms`);
     }
   };
   res.on('finish', done);
+  res.on('close', () => { if (!res.writableEnded) endMetrics(); });
 
   try {
     if ((url.pathname === '/' || url.pathname === '/v1') && (method === 'GET' || method === 'HEAD')) {
@@ -757,6 +770,7 @@ const server = http.createServer(async (req, res) => {
         openai_compatible: true,
         endpoints: {
           health: '/health',
+          metrics: '/metrics',
           models: '/v1/models',
           chat: '/v1/chat/completions',
         },
@@ -775,6 +789,7 @@ const server = http.createServer(async (req, res) => {
         warm: warmer.stats(),
         rate: limiter.stats(),
         watchdog: watchdog.stats(),
+        metrics: metrics.snapshot(),
         auth: {
           configured: !!(DS_EMAIL && DS_PASSWORD),
           suspendedUntil: suspendedUntil ? new Date(suspendedUntil).toISOString() : null,
@@ -784,14 +799,33 @@ const server = http.createServer(async (req, res) => {
         models: MODELS.map((m) => m.id),
       };
       if (method === 'HEAD') {
-        res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+        res.writeHead(200, withSecurityHeaders({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' }));
         return res.end();
       }
       return send(res, 200, body);
     }
 
+    if (url.pathname === '/metrics' && method === 'GET') {
+      const accept = String(req.headers.accept || '');
+      if (accept.includes('application/json')) return send(res, 200, metrics.snapshot());
+      const body = metrics.prometheus();
+      res.writeHead(200, withSecurityHeaders({
+        'Content-Type': 'text/plain; version=0.0.4; charset=utf-8',
+        'Content-Length': Buffer.byteLength(body),
+        'Cache-Control': 'no-store',
+        'Access-Control-Allow-Origin': '*',
+      }));
+      return res.end(body);
+    }
+
     if (url.pathname === '/v1/models' && method === 'GET') {
-      return send(res, 200, { object: 'list', data: MODELS });
+      const data = MODELS.map((m) => ({
+        ...m,
+        context_window: m.id.includes('reasoner') ? 128000 : 128000,
+        max_output_tokens: m.id.includes('reasoner') ? 32768 : 8192,
+        capabilities: { tools: true, streaming: true, reasoning: m.id.includes('reasoner') },
+      }));
+      return send(res, 200, { object: 'list', data });
     }
 
     if ((url.pathname === '/v1/chat/completions' || url.pathname === '/chat/completions') && method === 'POST') {
@@ -845,12 +879,17 @@ process.on('uncaughtException', (e) => {
     console.warn('[warn] no DeepSeek token configured — set DEEPSEEK_TOKENS or tokens.txt');
   }
 
+  server.keepAliveTimeout = 65_000;
+  server.headersTimeout = 66_000;
+  server.requestTimeout = 0; // streaming completions can be long-lived
+
   server.listen(PORT, HOST, () => {
     const shownHost = HOST === '0.0.0.0' ? '127.0.0.1' : HOST;
     console.log(`\n  Free DeepSeek API v${VERSION}  (OpenAI-compatible)`);
     console.log(`  ─────────────────────────────────────────────`);
     console.log(`  listening     : http://${HOST}:${PORT}`);
     console.log(`  local health  : http://${shownHost}:${PORT}/health`);
+    console.log(`  metrics       : http://${shownHost}:${PORT}/metrics`);
     console.log(`  tokens        : ${pool.size}`);
     console.log(`  default model : ${DEFAULT_MODEL}`);
     console.log(`  watchdog      : ${watchdog.intervalMs ? watchdog.intervalMs + 'ms' : 'off'}`);

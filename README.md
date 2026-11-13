@@ -184,8 +184,9 @@ Tokens are load-balanced round-robin. A revoked token is benched and (if credent
 | Method | Path | Description |
 | --- | --- | --- |
 | `GET` | `/` · `/v1` | Service info (HTML for browsers, JSON for API clients) |
-| `GET` | `/health` | Liveness, version/uptime, masked token/warm/rate/watchdog/auth status |
-| `GET` | `/v1/models` | `deepseek-chat`, `deepseek-reasoner` |
+| `GET` | `/health` | Liveness, version/uptime, masked token/warm/rate/watchdog/auth **+ metrics** |
+| `GET` | `/metrics` | Prometheus text metrics (or JSON with `Accept: application/json`) |
+| `GET` | `/v1/models` | `deepseek-chat`, `deepseek-reasoner` (with capability hints) |
 | `POST` | `/v1/chat/completions` | OpenAI chat completions (stream & non-stream), `tools` supported |
 
 | `model` | DeepSeek mode | Reasoning |
