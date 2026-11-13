@@ -95,7 +95,14 @@ process manager or `export`).
 | `DEEPSEEK_TOKENS` | — | Comma/space separated tokens (merged with `tokens.txt`) |
 | `DEEPSEEK_TOKENS_FILE` | `./tokens.txt` | Extra token file |
 | `WARM_POOL` | `3` | Pre-fetched PoW challenges kept per token (`0` disables) |
-| `WARM_SESSION_USES` | `100` | Reuse a session this many times before rotating |
+| `WARM_SESSION_USES` | `4` | Reuse a chat session this many times before rotating |
+| `WARM_SESSION_POOL` | `1` | Pre-created sessions kept per token |
+| `RATE_BURST` | `6` | Back-to-back upstream completions allowed per token |
+| `RATE_REFILL_MS` | `5000` | One new slot per token every N ms |
+| `RATE_COOLDOWN_MS` | `30000` | Pause after an empty answer (DeepSeek's silent throttle) |
+| `RATE_MAX_WAIT_MS` | `35000` | Longest a request will wait for a slot before erroring |
+| `WATCHDOG_MS` | `90000` | Liveness probe interval (`0` disables) |
+| `STREAM_HOLD_BACK` | `32` | Characters held back while scanning for a tool call |
 | `DEEPSEEK_PROXY` | — | Route upstream calls through `http://[user:pass@]host:port` |
 | `DEEPSEEK_EMAIL` | — | Account email, enables automatic re-login |
 | `DEEPSEEK_PASSWORD` | — | Account password, enables automatic re-login |
@@ -103,9 +110,10 @@ process manager or `export`).
 | `DEBUG_BODY_DIR` | — | Dump each incoming request body there (debugging) |
 
 Multiple tokens are load-balanced round-robin. A token that returns
-`INVALID_TOKEN` is benched with exponential backoff and the request is retried
-on the next token. When every token is cooling down the request waits up to 2 s
-for the soonest one instead of failing immediately.
+`INVALID_TOKEN` is benched for 5 minutes, the watchdog tries to re-mint it from
+`DEEPSEEK_EMAIL`/`DEEPSEEK_PASSWORD`, and the request is retried. When every
+token is cooling down the request waits briefly for the soonest one instead of
+failing immediately.
 
 `tokens.txt` is watched: paste a new token and the running server picks it up on
 the next request, no restart needed.
@@ -114,35 +122,64 @@ the next request, no restart needed.
 
 ## Token lifetime
 
-DeepSeek revokes web tokens aggressively. Two causes, in order of importance:
+### There is no refresh token
 
-**1. Datacenter IPs.** A token issued from a residential connection and used
-from a hosting provider (OVH, Hetzner, AWS…) is killed within minutes — and the
-account gets logged out of the browser too. You can check whether an IP is
-flagged before blaming the token:
+This is worth stating plainly because it saves a lot of searching. The full
+`/api/v0/...` surface was recovered from the Android client, and **only three
+endpoints ever mint a `userToken`**:
 
-```bash
-curl -s -o /dev/null -w '%{http_code}\n' https://chat.deepseek.com/
-```
+| endpoint | mints a token from |
+| --- | --- |
+| `POST /api/v0/users/login` | email + password |
+| `POST /api/v0/users/register` | email verification code |
+| `POST /api/v0/users/oauth/google/login` | a Google credential |
 
-`202` with an empty body means the anti-bot gate is up for that IP; a normal IP
-gets `200` and the app HTML.
+Everything else is read-only or destructive. `GET /api/v0/users/auth_token/list`
+lists sessions and answers `405 Method Not Allowed` to `POST`, `PUT`, `PATCH`
+and `DELETE`. `auth_token/create`, `auth_token/refresh`, `auth_token/renew`,
+`refresh_token` and `token/refresh` do not exist — they fall through to the SPA
+HTML like any other unknown path. No API response ever carries a `Set-Cookie`,
+so there is no cookie jar to keep alive either.
 
-Route the upstream through a clean IP:
+A token therefore cannot be refreshed. It can only be **re-minted by logging in
+again**, and it does not need refreshing as long as it stays alive.
 
-```bash
-DEEPSEEK_PROXY=http://user:pass@residential-proxy:8080 node server.js
-```
+### What actually kills a token
 
-Every upstream call then goes through a `CONNECT` tunnel, so DeepSeek sees the
-proxy's address. Verified working (the TLS handshake and the API response come
-back through the tunnel unchanged).
+Measured on a real account, one token, real completions:
 
-**2. Session rotation.** Logging in again, or refreshing the web app in a way
-that mints a new token, invalidates the old one. Keep the tab closed after
-copying the token.
+| pattern | result |
+| --- | --- |
+| 8 completions back-to-back | all succeed |
+| 9th back-to-back | empty `200` stream (silent throttle) |
+| 12 completions, 5 s apart | all succeed |
+| 20 sequential through the limiter | 20/20, token alive after |
+| agent tool loop, 8+ calls per turn, turns back-to-back | **token revoked (`40003`)** |
 
-If the account has a password, let the proxy repair itself:
+So it is burst traffic, not the clock and not the IP. Two things in the proxy
+used to generate that burst:
+
+- `warmer` pre-created a fresh chat session per request. Every session is
+  another upstream call, so one client request cost three upstream requests.
+- Concurrent requests that woke from the same timer all took a slot at once.
+
+Both are fixed:
+
+- **Token bucket** (`lib/ratelimit.js`, burst 6, refill 5000 ms, cooldown 30 s).
+  The proxy sits just under the tolerance instead of discovering it.
+- **One upstream completion in flight per token.** Agent tool loops are already
+  sequential, so this costs nothing and removes overlap entirely.
+- **Sessions are reused up to 4 times** (`WARM_SESSION_USES`) instead of one per
+  request, cutting upstream traffic by roughly 2.4x.
+
+Tune with `RATE_BURST`, `RATE_REFILL_MS`, `RATE_COOLDOWN_MS`, `RATE_MAX_WAIT_MS`.
+When the bucket is empty the request **waits and retries** rather than returning
+an error, so a client sees a slow answer instead of a failure.
+
+### Repairing a token that is already dead
+
+The only zero-input repair is a password. Set it once and the proxy re-mints
+tokens forever:
 
 ```bash
 DEEPSEEK_EMAIL=you@example.com \
@@ -151,9 +188,42 @@ DEEPSEEK_TOKEN_PERSIST=1 \
 node server.js
 ```
 
-On a `40003 INVALID_TOKEN` the server logs in again, swaps the token in the
-pool, optionally rewrites `tokens.txt`, and retries the request. One re-login is
-shared by all concurrent requests.
+`lib/watchdog.js` probes `GET /api/v0/users/current` every 90 s (`WATCHDOG_MS`).
+On `40003` it marks the token dead, logs in again, swaps it into the pool and
+rewrites `tokens.txt`. The same re-login fires inline on any `40003` a request
+hits. One re-login is shared by all concurrent requests.
+
+**If the account was created with Google it has no password**, so auto re-login
+cannot work. Set one: on `chat.deepseek.com` use *forgot password* with the
+account's email, take the code from the inbox, choose a password. That is a
+one-time manual step; after it the proxy is self-healing and you never touch it
+again. There is no way to do it programmatically — `email_reset_password` needs
+a verification code, and requesting one for a disposable domain returns
+`EMAIL_DOMAIN_NOT_SUPPORTED` while real domains return `RECAPTCHA_VERIFY_FAILED`
+(the captcha is genuinely verified; adding `captcha_token`, `recaptcha_token`,
+`turnstile_token` or `hcaptcha_token` changes nothing).
+
+Without a password, keep several tokens in `tokens.txt` from different accounts
+and let the pool rotate. Paste a new one and it is picked up without a restart.
+
+### Datacenter IPs
+
+Still worth checking, but it is not the primary cause. A token issued from a
+residential connection and used from a hosting provider can be flagged:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://chat.deepseek.com/
+```
+
+`202` with an empty body means the anti-bot gate is up for that IP; a clean IP
+gets `200` and the app HTML. Route the upstream through a clean IP if needed:
+
+```bash
+DEEPSEEK_PROXY=http://user:pass@residential-proxy:8080 node server.js
+```
+
+Every upstream call then goes through a `CONNECT` tunnel, so DeepSeek sees the
+proxy's address.
 
 ---
 
@@ -268,15 +338,20 @@ U+FF5C U+FF5C (fullwidth bars), not ASCII pipes.
 
 ### Streaming with tools
 
-A streamed tool call must not be sent as text. The proxy holds the first
-characters until they reveal the shape: `{`, ```` ``` ````, `<｜` or `<|` means a
-tool call (the rest is buffered and converted), anything else means prose and is
-streamed normally with no added latency. Only the initial bytes are delayed.
+A streamed tool call must not be sent as text, and the model sometimes writes
+prose *first* and appends the call afterwards — so deciding from the first
+character is not enough. `lib/streamgate.js` streams content with a 32-character
+tail held back (`STREAM_HOLD_BACK`) and watches the whole text for a marker:
+`"tool_calls"`, `｜DSML｜`, ```` ``` ```` or `<|`. The moment one appears,
+emission stops and everything after it is buffered for the parser. A marker
+split across two SSE chunks is therefore never emitted, because its prefix is
+still inside the held-back tail.
 
 ### Tests
 
 ```bash
-node scripts/test-parsers.js   # 11 parser cases, offline, no token
+node scripts/test-parsers.js    # 11 parser cases, offline, no token
+node scripts/test-streamgate.js # 23 streaming hold-back cases, offline
 node scripts/test-tools.js     # 8 end-to-end cases against the running proxy
 ```
 
@@ -473,10 +548,15 @@ Streaming responses carry timing headers:
 
 ### Upstream rate limit
 
-DeepSeek silently returns an **empty answer** (no error) after ~5 requests fired
-back-to-back on one account; it recovers within ~30 s. The benchmark spaces
-requests with `BENCH_DELAY_MS` (default 3000) and retries an empty run once.
-Space your own traffic, or run more tokens in the pool.
+DeepSeek silently returns an **empty answer** (no error) after 8 requests fired
+back-to-back on one account; it recovers within ~30 s. Hammering past that point
+is what gets the token revoked, so the proxy enforces its own budget instead:
+`lib/ratelimit.js` (token bucket, burst 6, refill 5 s) plus one upstream
+completion in flight per token. An empty answer engages a 30 s cooldown and the
+request is retried, so the client sees latency rather than a 429.
+
+The benchmark spaces requests with `BENCH_DELAY_MS` (default 3000) and retries an
+empty run once.
 
 ---
 
@@ -489,12 +569,16 @@ lib/pow.js                    DeepSeekHash WASM wrapper
 lib/stream.js                 SSE fragment assembler
 lib/tools.js                  tool-call emulation, JSON + DSML parsers
 lib/pool.js                   round-robin token pool, hot reload, re-login swap
+lib/ratelimit.js              token bucket + per-token upstream mutex
+lib/watchdog.js               liveness probe, triggers re-login on 40003
+lib/streamgate.js             content hold-back / tool-call detection while streaming
 lib/auth.js                   email+password login (also used for auto re-login)
 lib/sha3_wasm_bg.*.wasm       original PoW module
 scripts/login.js              email+password -> userToken (CLI wrapper)
 scripts/token-check.js        verify the tokens in tokens.txt are still alive
 scripts/pow-selftest.js       offline PoW vector test
 scripts/test-parsers.js       offline tool-call parser tests
+scripts/test-streamgate.js    offline streaming hold-back tests
 scripts/test-tools.js         end-to-end tool-calling tests
 lib/warm.js                   pre-warm cache (challenges + reusable session)
 scripts/bench.js              TTFT / tokens-per-second benchmark
@@ -521,8 +605,9 @@ docker run -p 8787:8787 -e API_KEY=sk-local free-deepseek-api
 
 - `usage` counters mirror DeepSeek's `accumulated_token_usage`; DeepSeek does not
   report prompt/completion split, so all three fields carry the same number.
-- Each request creates a fresh DeepSeek chat session. Conversation state lives
-  in the `messages` array you send — the proxy flattens it into a transcript.
+- Chat sessions are reused up to 4 times, then rotated. Conversation state lives
+  in the `messages` array you send — the proxy flattens it into a transcript, so
+  no history leaks between callers.
 - Accounts can be suspended by DeepSeek for automated traffic. Keep a pool.
 - Token format is a raw base64 blob, up to ~72 chars; do not URL-encode it.
 - `lib/sha3_wasm_bg.7b9ca65ddd.wasm` is DeepSeek's own artifact, redistributed

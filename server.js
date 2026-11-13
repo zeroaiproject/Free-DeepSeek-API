@@ -9,7 +9,10 @@ const { TokenPool } = require('./lib/pool');
 const { complete, ApiError } = require('./lib/deepseek');
 const { login } = require('./lib/auth');
 const { Warmer } = require('./lib/warm');
+const { RateLimiter } = require('./lib/ratelimit');
+const { Watchdog } = require('./lib/watchdog');
 const { makeExtractor } = require('./lib/stream');
+const { StreamGate } = require('./lib/streamgate');
 const { buildToolInstructions, extractToolCalls, buildTranscript, toolDefs } = require('./lib/tools');
 const { init: initPow } = require('./lib/pow');
 
@@ -20,6 +23,11 @@ const DEFAULT_MODEL = process.env.DEFAULT_MODEL || 'deepseek-chat';
 
 const pool = TokenPool.load();
 const warmer = new Warmer();
+const limiter = new RateLimiter({
+  burst: Number(process.env.RATE_BURST || 6),
+  refillMs: Number(process.env.RATE_REFILL_MS || 5000),
+  cooldownMs: Number(process.env.RATE_COOLDOWN_MS || 30_000),
+});
 
 // Optional automatic re-login: DeepSeek revokes tokens, and a revoked token
 // can be replaced without restarting if the account password is available.
@@ -49,6 +57,12 @@ function relogin(deadToken) {
 
   return reloginInFlight;
 }
+
+const watchdog = new Watchdog({
+  pool,
+  relogin,
+  intervalMs: Number(process.env.WATCHDOG_MS || 90_000),
+});
 
 const MODELS = [
   { id: 'deepseek-chat', object: 'model', created: 1700000000, owned_by: 'deepseek' },
@@ -142,7 +156,7 @@ function toToolCalls(calls) {
 
 // Buffers the first line of the upstream body to distinguish an SSE stream
 // (starts with "event:"/"data:") from a plain JSON error document.
-function createStreamGate(onStream, onJson) {
+function createSseSplitter(onStream, onJson) {
   let pending = '';
   let decided = false;
   return (chunkText) => {
@@ -159,19 +173,9 @@ function createStreamGate(onStream, onJson) {
   };
 }
 
-// First non-whitespace characters that start a tool call rather than prose.
-// DSML (DeepSeek's markup tool format) begins with '<' + U+FF5C.
-const TOOL_PREFIXES = ['{', '```', '<\uFF5C', '<|'];
-
-// 'tool' => buffer the whole answer, 'wait' => need more characters,
-// 'text' => a normal answer, stream it.
-function classifyPrefix(peek) {
-  for (const p of TOOL_PREFIXES) {
-    if (peek.startsWith(p)) return 'tool';
-    if (p.startsWith(peek)) return 'wait';
-  }
-  return 'text';
-}
+// Tool-call detection and content hold-back live in lib/streamgate.js so they
+// can be unit tested without an HTTP round trip.
+const HOLD_BACK = Number(process.env.STREAM_HOLD_BACK || 32);
 
 async function handleChat(req, res) {
   // Pick up a token pasted into tokens.txt without a restart.
@@ -209,8 +213,9 @@ async function handleChat(req, res) {
 
   // A single token is normal, so retries must not be capped by pool size:
   // one upstream failure should not turn into an immediate 503.
-  const MAX_ATTEMPTS = 3;
+  const MAX_ATTEMPTS = 4;
   const MAX_WAIT_MS = 2_000;
+  const MAX_RATE_WAIT_MS = Number(process.env.RATE_MAX_WAIT_MS || 35_000);
   let lastError = null;
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
@@ -227,6 +232,25 @@ async function handleChat(req, res) {
       token = pool.pick();
       if (!token) return err(res, 503, 'no DeepSeek token available', 'service_unavailable');
     }
+
+    // Stay under DeepSeek's burst tolerance before spending a request.
+    // The check and the reservation must be atomic: requests that wake from the
+    // same timer would otherwise all take a slot at once and burst again.
+    let rateBlocked = false;
+    for (;;) {
+      const wait = limiter.waitMs(token);
+      if (wait <= 0) {
+        limiter.take(token);
+        break;
+      }
+      if (wait > MAX_RATE_WAIT_MS) {
+        lastError = new ApiError('RATE_LIMITED', 'DeepSeek rate limit; retry shortly', 429);
+        rateBlocked = true;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, wait));
+    }
+    if (rateBlocked) break;
 
     const id = 'chatcmpl-' + crypto.randomUUID().replace(/-/g, '');
     const created = Math.floor(Date.now() / 1000);
@@ -246,11 +270,11 @@ async function handleChat(req, res) {
         let started = false;
         let jsonBody = '';
 
-        // With tools enabled the model may answer with a JSON tool call, which
-        // must not be streamed as text. Hold output until the first characters
-        // reveal which shape it is.
-        let mode = toolsActive ? 'peek' : 'stream';
-        let pending = [];
+        // With tools enabled the answer may be a tool call, and the model
+        // sometimes writes prose first and then appends the call. The gate
+        // emits content with a short tail held back and stops emitting as soon
+        // as a tool-call marker appears, so nothing leaks as text.
+        const sg = new StreamGate({ toolsActive, holdBack: HOLD_BACK });
 
         const write = (obj) => res.write('data: ' + JSON.stringify(obj) + '\n\n');
         const emit = (ev) =>
@@ -280,27 +304,26 @@ async function handleChat(req, res) {
           write(chunk(id, model, { role: 'assistant', content: '' }));
         };
 
+        // Streams content up to the safe point.
+        const pump = () => {
+          const piece = sg.pump(extractor.text);
+          if (piece) emit({ kind: 'content', delta: piece });
+        };
+
         const handleEvents = (events) => {
           for (const ev of events) {
-            if (mode === 'stream') {
+            if (ev.kind === 'reasoning') {
               emit(ev);
               continue;
             }
-            if (mode === 'buffer') continue;
-            pending.push(ev);
-            if (ev.kind !== 'content') continue;
-            const peek = extractor.text.trimStart();
-            if (!peek) continue;
-            const kind = classifyPrefix(peek);
-            if (kind === 'wait') continue;
-            if (kind === 'tool') {
-              mode = 'buffer';
-            } else {
-              mode = 'stream';
-              for (const p of pending) emit(p);
-              pending = [];
-            }
+            if (sg.buffering) continue;
+            pump();
           }
+        };
+
+        const flushHeld = () => {
+          const piece = sg.finish(extractor.text);
+          if (piece) emit({ kind: 'content', delta: piece });
         };
 
         const onStream = (chunkText) => {
@@ -310,8 +333,14 @@ async function handleChat(req, res) {
           jsonBody += chunkText;
         };
 
-        const gate = createStreamGate(onStream, onJson);
-        const upstream = await complete(token, { sessionId, challenge, prompt, thinking, onData: gate, timing });
+        const splitter = createSseSplitter(onStream, onJson);
+        const release = await limiter.lock(token);
+        let upstream;
+        try {
+          upstream = await complete(token, { sessionId, challenge, prompt, thinking, onData: splitter, timing });
+        } finally {
+          release();
+        }
 
         if (!started && !extractor.text && !extractor.reasoning) {
           // No content at all. Either a JSON error document came back instead of
@@ -335,14 +364,15 @@ async function handleChat(req, res) {
             continue;
           }
 
-          // Empty 200: retrying immediately just burns another request, so tell
-          // the caller instead of hammering the upstream.
+          // Empty 200 means DeepSeek rate limited us. Sit out the cooldown and
+          // retry rather than surfacing an error to the client.
+          limiter.cooldown(token);
           lastError = new ApiError(
             'EMPTY_ANSWER',
             'upstream returned an empty answer (DeepSeek rate limit); retry in ~30s',
             429
           );
-          break;
+          continue;
         }
 
         pool.reward(token);
@@ -351,7 +381,9 @@ async function handleChat(req, res) {
         let finish = 'stop';
         let calls = null;
 
-        if (mode !== 'stream' && toolsActive) {
+        // A buffered tail is the only place a tool call can hide once prose has
+        // already been streamed.
+        if (toolsActive && sg.buffering) {
           calls = extractToolCalls(extractor.text, allowedNames);
         }
 
@@ -375,10 +407,17 @@ async function handleChat(req, res) {
             )
           );
           finish = 'tool_calls';
-        } else if (mode !== 'stream') {
+        } else {
           open();
           if (extractor.reasoning) write(chunk(id, model, { reasoning_content: extractor.reasoning }));
-          if (extractor.text) write(chunk(id, model, { content: extractor.text }));
+          // Emit whatever the hold-back kept, or the whole buffer when a
+          // suspected tool call turned out to be ordinary prose.
+          if (sg.buffering) {
+            const rest = sg.drain(extractor.text);
+            if (rest) write(chunk(id, model, { content: rest }));
+          } else {
+            flushHeld();
+          }
         }
 
         write(chunk(id, model, {}, finish));
@@ -388,7 +427,13 @@ async function handleChat(req, res) {
       }
 
       // ---- non-streaming path --------------------------------------------
-      const upstream = await complete(token, { sessionId, challenge, prompt, thinking });
+      const release = await limiter.lock(token);
+      let upstream;
+      try {
+        upstream = await complete(token, { sessionId, challenge, prompt, thinking });
+      } finally {
+        release();
+      }
 
       if (upstream.status !== 200) {
         lastError = new ApiError('HTTP_' + upstream.status, upstream.body.slice(0, 300), upstream.status);
@@ -416,12 +461,13 @@ async function handleChat(req, res) {
       extractor.flush();
 
       if (!extractor.text && !extractor.reasoning) {
+        limiter.cooldown(token);
         lastError = new ApiError(
           'EMPTY_ANSWER',
           'upstream returned an empty answer (DeepSeek rate limit); retry in ~30s',
           429
         );
-        break;
+        continue;
       }
 
       pool.reward(token);
@@ -461,6 +507,7 @@ async function handleChat(req, res) {
       // stream, so retrying would corrupt it. Close it and stop.
       if (res.headersSent) {
         try {
+          res.write('data: ' + JSON.stringify(chunk(id, model, {}, 'stop')) + '\n\n');
           res.write('data: [DONE]\n\n');
         } catch {}
         return res.end();
@@ -503,6 +550,8 @@ const server = http.createServer(async (req, res) => {
         status: 'ok',
         tokens: pool.status(),
         warm: warmer.stats(),
+        rate: limiter.stats(),
+        watchdog: watchdog.stats(),
         models: MODELS.map((m) => m.id),
       });
     }
@@ -528,5 +577,10 @@ const server = http.createServer(async (req, res) => {
     console.log(`Free DeepSeek API listening on http://${HOST}:${PORT}`);
     console.log(`  tokens loaded : ${pool.size}`);
     console.log(`  default model : ${DEFAULT_MODEL}`);
+    console.log(`  watchdog      : ${watchdog.intervalMs ? watchdog.intervalMs + 'ms' : 'off'}`);
+    if (!DS_EMAIL || !DS_PASSWORD) {
+      console.log('  auto re-login : off (set DEEPSEEK_EMAIL + DEEPSEEK_PASSWORD)');
+    }
+    watchdog.start();
   });
 })();
