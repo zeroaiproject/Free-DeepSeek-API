@@ -14,10 +14,10 @@
 <br/>
 
 ```text
-┌──────────────┐      OpenAI /v1/chat/completions      ┌──────────────────────┐      PoW + Bearer       ┌───────────────────┐
-│  App / Agent │  ───────────────────────────────────▶  │  Free DeepSeek API  │  ────────────────────▶  │ chat.deepseek.com │
-│  (SDK, IDE)  │  ◀────────── SSE / JSON ─────────────  │  (this proxy)       │  ◀───── SSE/JSON ─────  │   (web endpoint)  │
-└──────────────┘                                        └──────────────────────┘                         └───────────────────┘
+┌──────────────┐   OpenAI / Anthropic / Vertex APIs   ┌──────────────────────┐      PoW + Bearer       ┌───────────────────┐
+│  App / Agent │  ──────────────────────────────────▶  │  Free DeepSeek API  │  ────────────────────▶  │ chat.deepseek.com │
+│  (SDK, IDE)  │  ◀────────── SSE / JSON ───────────  │  (this proxy)       │  ◀───── SSE/JSON ─────  │   (web endpoint)  │
+└──────────────┘                                       └──────────────────────┘                         └───────────────────┘
 ```
 
 <p>
@@ -44,7 +44,7 @@
 | 🔐 | **Native PoW** | Solves `DeepSeekHashV1` via the original WASM (`wasm_solve`), ~30–110 ms. |
 | 🔁 | **Resilience** | Round-robin token pool, hot-reload, rate limiting + jitter/gap/cooldown, one in-flight completion per token, pre-warming, watchdog, optional auto re-login. |
 | 📈 | **Observability** | `/health` (masked status + metrics), `/metrics` (Prometheus/JSON), `X-Request-Id`, `X-Ds-*` timing headers. |
-| 🧩 | **Drop-in** | OpenAI SDKs, curl, and agent integrations (OpenCode, Cursor, Continue, Cline, Aider, Zed, etc.). |
+| 🧩 | **Drop-in** | OpenAI, **Anthropic Messages**, and **Vertex/Gemini** compatible APIs for SDKs, curl, and agent integrations (OpenCode, Cursor, Continue, Cline, Aider, Zed, etc.). |
 
 > [!NOTE]
 > The proxy uses the **web** endpoint `chat.deepseek.com` with `userToken`s. Keep traffic moderate and compliant with DeepSeek policies: automated usage may lead to rate limits or account suspension.
@@ -105,7 +105,7 @@ The proxy requires a **`userToken`** (stored by the DeepSeek web app after login
 
 ## 🔬 How it works
 
-The proxy reproduces the `chat.deepseek.com` web flow and exposes it as an OpenAI-compatible API. At a high level: **bearer auth (`userToken`) → per-request PoW → chat session → SSE completion → OpenAI translation**.
+The proxy reproduces the `chat.deepseek.com` web flow and exposes it as OpenAI-, Anthropic-, and Vertex/Gemini-compatible APIs. At a high level: **bearer auth (`userToken`) → per-request PoW → chat session → SSE completion → format translation**.
 
 ```text
 Client (SDK/agent)                     Local proxy                         DeepSeek web
@@ -166,7 +166,10 @@ The web endpoint has no native function calling; the proxy emulates it:
 | `GET` | `/health` | Health, uptime, tokens (masked), warm/rate/watchdog/auth, metrics |
 | `GET` | `/metrics` | Prometheus (`text/plain`) or JSON (`Accept: application/json`) |
 | `GET` | `/v1/models` | Models and capabilities |
-| `POST` | `/v1/chat/completions` | Chat completions (stream/non-stream), `tools` |
+| `POST` | `/v1/chat/completions` | OpenAI-compatible chat completions (stream/non-stream), `tools` |
+| `POST` | `/v1/messages` | Anthropic Messages API compatible (stream/non-stream), tools |
+| `POST` | `/v1beta/models/{model}:generateContent` | Vertex/Gemini `generateContent` compatible |
+| `POST` | `/v1beta/models/{model}:streamGenerateContent` | Vertex/Gemini `streamGenerateContent` compatible (SSE) |
 
 ### 🧱 Models
 
@@ -218,7 +221,24 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 
 ## 🤖 Integrations (coding agents)
 
-> **All tutorials: [tutos/](tutos/README.md)** — base `http://127.0.0.1:8787/v1`, models `deepseek-chat` / `deepseek-reasoner`, dummy key `public` if required.
+> **All tutorials: [tutos/](tutos/README.md)** — OpenAI base `http://127.0.0.1:8787/v1`, Anthropic `http://127.0.0.1:8787` (`/v1/messages`), Vertex/Gemini `http://127.0.0.1:8787/v1beta/...:generateContent`, models `deepseek-chat` / `deepseek-reasoner`, dummy key `public` if required.
+
+<details>
+<summary><b>Anthropic & Vertex examples</b></summary>
+
+```bash
+# Anthropic Messages API
+curl http://127.0.0.1:8787/v1/messages \
+  -H 'Content-Type: application/json' \
+  -H 'x-api-key: public' \
+  -d '{"model":"deepseek-chat","max_tokens":256,"messages":[{"role":"user","content":"Hello"}]}'
+
+# Vertex/Gemini generateContent
+curl http://127.0.0.1:8787/v1beta/models/deepseek-chat:generateContent \
+  -H 'Content-Type: application/json' \
+  -d '{"contents":[{"role":"user","parts":[{"text":"Hello"}]}]}'
+```
+</details>
 
 | Agent / tool | Guide |
 |---|---|

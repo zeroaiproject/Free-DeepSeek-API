@@ -2,7 +2,7 @@
 
 Setup and integration guides for **Free DeepSeek API** with popular coding tools and agentic assistants.
 
-> **Base URL (OpenAI-compatible):** `http://127.0.0.1:8787/v1`  
+> **Base URLs:** OpenAI `http://127.0.0.1:8787/v1` · Anthropic `http://127.0.0.1:8787` (`/v1/messages`) · Vertex/Gemini `http://127.0.0.1:8787/v1beta`  
 > **Models:** `deepseek-chat` (general), `deepseek-reasoner` (thinking → `reasoning_content`)  
 > **Context:** up to **1M tokens** advertised (subject to what the web endpoint accepts) · tool/function calling emulated  
 > **API key:** none required by the proxy (unless you set `API_KEY`) — most clients require a non-empty value: use `public` or `not-needed`.

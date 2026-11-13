@@ -1,6 +1,6 @@
 # Free DeepSeek API
 
-> OpenAI-compatible proxy for `chat.deepseek.com` (DeepSeek web endpoint) with native PoW, streaming, emulated tool-calling, and zero npm runtime dependencies.
+> OpenAI-, Anthropic-, and Vertex/Gemini-compatible proxy for `chat.deepseek.com` (DeepSeek web endpoint) with native PoW, streaming, emulated tool-calling, and zero npm runtime dependencies.
 
 - Repo: https://github.com/zeroaiproject/Free-DeepSeek-API
 - License: GLWTS
@@ -9,12 +9,14 @@
 
 ## What it does
 
-- OpenAI-compatible API backed by DeepSeek web `userToken`s:
+- OpenAI-, Anthropic-, and Vertex/Gemini-compatible APIs backed by DeepSeek web `userToken`s:
   - `GET /`, `/v1` — service info (HTML for browsers, JSON for clients)
   - `GET /health` — status, uptime, masked token/warm/rate/watchdog/auth, metrics & rates
   - `GET /metrics` — Prometheus text (or JSON with `Accept: application/json`)
   - `GET /v1/models` — models + capability hints
-  - `POST /v1/chat/completions` — streaming/non-streaming, `tools`/`tool_choice`/`parallel_tool_calls`, reasoning (`reasoning_content`)
+  - `POST /v1/chat/completions` — OpenAI chat completions (stream/non-stream), tools/reasoning
+  - `POST /v1/messages` — Anthropic Messages API (stream/non-stream), tools
+  - `POST /v1beta/models/{model}:generateContent` and `:streamGenerateContent` — Vertex/Gemini compatible
 - Solves `DeepSeekHashV1` PoW natively via shipped WASM (`lib/sha3_wasm_bg.*.wasm`).
 - Emulates tool calling (web has none): injects schemas, parses JSON and DSML outputs, stream-safe hold-back to prevent markup leaks.
 - Resilience: round-robin token pool, hot token reload, pacing (bucket + jitter/gap + escalating cooldown), one in-flight completion per token, pre-warm (challenges/sessions), staggered watchdog, optional auto re-login and outbound proxy, metrics/rate/latency visibility.

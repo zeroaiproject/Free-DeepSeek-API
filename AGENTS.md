@@ -7,7 +7,7 @@ Guidance for coding agents working in this repository.
 **Free DeepSeek API** is an OpenAI-compatible HTTP proxy for `chat.deepseek.com` (web endpoint) backed by user tokens.
 
 - **Zero npm runtime dependencies** (Node.js 18+ built-ins only). Optional tooling (e.g. Playwright for browser captcha solving) must be lazy-loaded/isolated.
-- Core flow: solve `DeepSeekHashV1` PoW (shipped WASM), create/reuse chat sessions, stream completions, and translate DeepSeek SSE into OpenAI `chat.completion(.chunk)` responses.
+- Core flow: solve `DeepSeekHashV1` PoW (shipped WASM), create/reuse chat sessions, stream completions, and translate DeepSeek SSE into OpenAI/Anthropic/Vertex-compatible responses.
 - Tool calling is **emulated** (no native web function-calling): schemas are injected into the prompt and replies are parsed back into `tool_calls` (JSON and DSML formats), with stream hold-back to avoid leaking tool markup.
 
 ## Repo layout

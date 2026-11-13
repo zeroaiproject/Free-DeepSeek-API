@@ -19,6 +19,7 @@ const { StreamGate } = require('./lib/streamgate');
 const { buildToolInstructions, extractToolCalls, buildTranscript, toolDefs, forcedTool } = require('./lib/tools');
 const { init: initPow } = require('./lib/pow');
 const { Metrics } = require('./lib/metrics');
+const compat = require('./lib/compat');
 
 const pkg = (() => { try { return require('./package.json'); } catch { return {}; } })();
 const VERSION = pkg.version || '0.0.0';
@@ -203,13 +204,15 @@ function landingPage() {
   <div class="wrap">
     <div class="badge">OpenAI-compatible &middot; v${esc(VERSION)} &middot; <span class="status">running</span></div>
     <h1><span>Free DeepSeek API</span></h1>
-    <p class="lead">A zero-dependency proxy for <code>chat.deepseek.com</code> exposing <code>/v1/chat/completions</code> with streaming, reasoning, and tool-calling emulation.</p>
+    <p class="lead">A zero-dependency proxy for <code>chat.deepseek.com</code> exposing OpenAI, Anthropic, and Vertex/Gemini compatible APIs with streaming, reasoning, and tool-calling emulation.</p>
 
     <div class="grid">
       <div class="card"><h3>Health</h3><p><a class="pill" href="/health">GET /health</a></p></div>
       <div class="card"><h3>Metrics</h3><p><a class="pill" href="/metrics">GET /metrics</a></p></div>
       <div class="card"><h3>Models</h3><p><a class="pill" href="/v1/models">GET /v1/models</a></p></div>
-      <div class="card"><h3>Chat</h3><p><code>POST /v1/chat/completions</code></p></div>
+      <div class="card"><h3>Chat (OpenAI)</h3><p><code>POST /v1/chat/completions</code></p></div>
+      <div class="card"><h3>Anthropic</h3><p><code>POST /v1/messages</code></p></div>
+      <div class="card"><h3>Vertex / Gemini</h3><p><code>POST /v1beta/models/{m}:generateContent</code></p></div>
     </div>
 
 <pre><span class="c"># quick test</span>
@@ -332,28 +335,28 @@ function createSseSplitter(onStream, onJson) {
 // can be unit tested without an HTTP round trip.
 const HOLD_BACK = Number(process.env.STREAM_HOLD_BACK || 32);
 
-async function handleChat(req, res) {
+async function handleChat(req, res, opts = {}) {
+  const format = opts.format || 'openai'; // 'openai' | 'anthropic' | 'vertex'
+  const reqModelLabel = opts.reqModel || null;
+
   // Pick up a token pasted into tokens.txt without a restart.
   pool.reloadIfChanged();
 
   // Nothing below can succeed while the account is suspended, and every
   // attempt would be another request on a flagged account.
   if (suspendedUntil > Date.now() && !pool.pick()) {
-    return err(
-      res,
-      503,
-      `DeepSeek account suspended until ${new Date(suspendedUntil).toISOString()}`,
-      'account_suspended'
-    );
+    return err(res, 503, `DeepSeek account suspended until ${new Date(suspendedUntil).toISOString()}`, 'account_suspended');
   }
 
-  let body;
-  try {
-    body = await readBody(req);
-  } catch (e) {
-    const msg = String(e && e.message || e);
-    if (/payload too large/i.test(msg)) return err(res, 413, 'payload too large', 'invalid_request_error');
-    return err(res, 400, 'invalid JSON body', 'invalid_request_error');
+  let body = opts.body;
+  if (body === undefined) {
+    try {
+      body = await readBody(req);
+    } catch (e) {
+      const msg = String(e && e.message || e);
+      if (/payload too large/i.test(msg)) return err(res, 413, 'payload too large', 'invalid_request_error');
+      return err(res, 400, 'invalid JSON body', 'invalid_request_error');
+    }
   }
 
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
@@ -736,6 +739,422 @@ async function handleChat(req, res) {
   return err(res, status, lastError ? lastError.message : 'upstream failure', 'upstream_error');
 }
 
+function sendAnthropic(res, status, obj) {
+  const body = JSON.stringify(obj);
+  res.writeHead(status, withSecurityHeaders({
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': Buffer.byteLength(body),
+    'Cache-Control': 'no-store',
+    'Access-Control-Allow-Origin': '*',
+  }));
+  res.end(body);
+}
+
+function anthropicErr(res, status, message, type = 'invalid_request_error') {
+  sendAnthropic(res, status, compat.anthropicError(message, type));
+}
+
+async function handleAnthropicMessages(req, res) {
+  pool.reloadIfChanged();
+  if (suspendedUntil > Date.now() && !pool.pick()) {
+    return anthropicErr(res, 503, `DeepSeek account suspended until ${new Date(suspendedUntil).toISOString()}`, 'api_error');
+  }
+
+  let raw;
+  try { raw = await readBody(req); } catch (e) {
+    const msg = String(e && e.message || e);
+    if (/payload too large/i.test(msg)) return anthropicErr(res, 413, 'payload too large');
+    return anthropicErr(res, 400, 'invalid JSON body');
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return anthropicErr(res, 400, 'request body must be a JSON object');
+  if (!Array.isArray(raw.messages) || raw.messages.length === 0) return anthropicErr(res, 400, '`messages` must be a non-empty array');
+
+  const reqModel = typeof raw.model === 'string' ? raw.model : 'deepseek-chat';
+  const oai = compat.anthropicToOpenAI(raw);
+  const model = oai.model || DEFAULT_MODEL;
+  const stream = !!oai.stream;
+  const thinking = /reason/i.test(model) || raw.thinking;
+
+  const defs = toolDefs(Array.isArray(oai.tools) ? oai.tools : []);
+  const toolChoice = oai.tool_choice;
+  const toolsActive = defs.length > 0 && toolChoice !== 'none';
+  const allowedNames = new Set(defs.map((d) => d.name));
+  const parallel = raw.parallel_tool_calls !== false;
+
+  let prompt;
+  try {
+    const transcript = buildTranscript(oai.messages, contentToText);
+    prompt = toolsActive ? `System: ${buildToolInstructions(oai.tools, toolChoice)}\n\n${transcript}` : transcript;
+  } catch (e) {
+    return anthropicErr(res, 400, e.message);
+  }
+
+  const MAX_ATTEMPTS = 4;
+  const MAX_WAIT_MS = 2_000;
+  const MAX_RATE_WAIT_MS = Number(process.env.RATE_MAX_WAIT_MS || 35_000);
+  let lastError = null;
+
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    let token = pool.pick();
+    if (!token) {
+      if (suspendedUntil > Date.now()) return anthropicErr(res, 503, `DeepSeek account suspended until ${new Date(suspendedUntil).toISOString()}`, 'api_error');
+      const wait = pool.nextAvailableMs();
+      if (!Number.isFinite(wait) || wait > MAX_WAIT_MS) return anthropicErr(res, 503, 'no DeepSeek token available', 'api_error');
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      token = pool.pick();
+      if (!token) return anthropicErr(res, 503, 'no DeepSeek token available', 'api_error');
+    }
+
+    let rateBlocked = false;
+    for (;;) {
+      const wait = limiter.waitMs(token);
+      if (wait <= 0) { limiter.take(token); break; }
+      if (wait > MAX_RATE_WAIT_MS) { lastError = new ApiError('RATE_LIMITED', 'DeepSeek rate limit; retry shortly', 429); rateBlocked = true; break; }
+      await new Promise((r) => setTimeout(r, wait));
+    }
+    if (rateBlocked) break;
+
+    const msgId = 'msg_' + crypto.randomUUID().replace(/-/g, '');
+    try {
+      const [sessionId, challenge] = await Promise.all([warmer.session(token), warmer.challenge(token)]);
+      if (stream && !res.headersSent) {
+        const extractor = makeExtractor();
+        const timing = {};
+        let started = false;
+        let jsonBody = '';
+        const sg = new StreamGate({ toolsActive, holdBack: HOLD_BACK });
+        const sse = (event, data) => { res.write(`event: ${event}\n`); res.write(`data: ${JSON.stringify(data)}\n\n`); };
+        let textBlockOpen = false;
+        let thinkingBlockOpen = false;
+        let nextIndex = 0;
+        let textIndex = -1;
+        let thinkIndex = -1;
+        let outputTokens = 0;
+
+        const ensureStart = () => {
+          if (started) return;
+          started = true;
+          res.writeHead(200, withSecurityHeaders({
+            'Content-Type': 'text/event-stream; charset=utf-8',
+            'Cache-Control': 'no-cache, no-transform',
+            'Connection': 'keep-alive',
+            'Access-Control-Allow-Origin': '*',
+          }));
+          sse('message_start', { type: 'message_start', message: { id: msgId, type: 'message', role: 'assistant', model: reqModel, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } } });
+        };
+        const openText = () => {
+          if (textBlockOpen) return;
+          ensureStart();
+          textIndex = nextIndex++;
+          textBlockOpen = true;
+          sse('content_block_start', { type: 'content_block_start', index: textIndex, content_block: { type: 'text', text: '' } });
+        };
+        const closeText = () => {
+          if (!textBlockOpen) return;
+          sse('content_block_stop', { type: 'content_block_stop', index: textIndex });
+          textBlockOpen = false;
+        };
+        const openThinking = () => {
+          if (thinkingBlockOpen) return;
+          ensureStart();
+          thinkIndex = nextIndex++;
+          thinkingBlockOpen = true;
+          sse('content_block_start', { type: 'content_block_start', index: thinkIndex, content_block: { type: 'thinking', thinking: '' } });
+        };
+        const closeThinking = () => {
+          if (!thinkingBlockOpen) return;
+          sse('content_block_stop', { type: 'content_block_stop', index: thinkIndex });
+          thinkingBlockOpen = false;
+        };
+
+        const pump = () => {
+          const piece = sg.pump(extractor.text);
+          if (piece) { closeThinking(); openText(); sse('content_block_delta', { type: 'content_block_delta', index: textIndex, delta: { type: 'text_delta', text: piece } }); }
+        };
+
+        const handleEvents = (events) => {
+          for (const ev of events) {
+            if (ev.kind === 'reasoning') {
+              openThinking();
+              sse('content_block_delta', { type: 'content_block_delta', index: thinkIndex, delta: { type: 'thinking_delta', thinking: ev.delta } });
+              continue;
+            }
+            if (sg.buffering) continue;
+            pump();
+          }
+        };
+
+        const onStream = (chunkText) => { handleEvents(extractor.push(chunkText)); };
+        const onJson = (chunkText) => { jsonBody += chunkText; };
+        const splitter = createSseSplitter(onStream, onJson);
+        const release = await limiter.lock(token);
+        let upstream;
+        try { upstream = await complete(token, { sessionId, challenge, prompt, thinking, onData: splitter, timing }); } finally { release(); }
+
+        if (!started && !extractor.text && !extractor.reasoning) {
+          let j = null; try { j = JSON.parse(jsonBody); } catch {}
+          if (j) { lastError = new ApiError(j.code, j.msg, upstream.status); if (isAuthError(lastError)) { pool.penalize(token, 300_000); await relogin(token); } continue; }
+          if (upstream.status !== 200) { lastError = new ApiError('HTTP_' + upstream.status, (jsonBody || 'empty upstream').slice(0, 300), upstream.status); continue; }
+          limiter.cooldown(token);
+          lastError = new ApiError('EMPTY_ANSWER', 'upstream returned an empty answer (DeepSeek rate limit); retry in ~30s', 429);
+          continue;
+        }
+
+        pool.reward(token); limiter.reward(token);
+        handleEvents(extractor.flush());
+        outputTokens = extractor.usage || 0;
+
+        let calls = null;
+        if (toolsActive && sg.buffering) calls = extractToolCalls(extractor.text, allowedNames);
+        if (calls) {
+          const forced = forcedTool(toolChoice);
+          if (forced) { const only = calls.filter((c) => c.name === forced); if (only.length) calls = only; }
+          if (!parallel) calls = calls.slice(0, 1);
+        }
+
+        let stopReason = 'end_turn';
+        if (calls) {
+          closeThinking(); closeText();
+          for (const c of toToolCalls(calls)) {
+            const idx = nextIndex++;
+            const input = compat.safeJsonParse(c.function.arguments) || {};
+            sse('content_block_start', { type: 'content_block_start', index: idx, content_block: { type: 'tool_use', id: c.id, name: c.function.name, input: {} } });
+            sse('content_block_delta', { type: 'content_block_delta', index: idx, delta: { type: 'input_json_delta', partial_json: JSON.stringify(input) } });
+            sse('content_block_stop', { type: 'content_block_stop', index: idx });
+          }
+          stopReason = 'tool_use';
+        } else {
+          if (sg.buffering) {
+            const rest = sg.drain(extractor.text);
+            if (rest) { closeThinking(); openText(); sse('content_block_delta', { type: 'content_block_delta', index: textIndex, delta: { type: 'text_delta', text: rest } }); }
+          } else {
+            const piece = sg.finish(extractor.text);
+            if (piece) { closeThinking(); openText(); sse('content_block_delta', { type: 'content_block_delta', index: textIndex, delta: { type: 'text_delta', text: piece } }); }
+          }
+          closeText(); closeThinking();
+        }
+
+        ensureStart();
+        sse('message_delta', { type: 'message_delta', delta: { stop_reason: stopReason, stop_sequence: null }, usage: { output_tokens: outputTokens } });
+        sse('message_stop', { type: 'message_stop' });
+        return res.end();
+      }
+
+      // non-streaming
+      const release = await limiter.lock(token);
+      let upstream;
+      try { upstream = await complete(token, { sessionId, challenge, prompt, thinking }); } finally { release(); }
+      if (upstream.status !== 200) { lastError = new ApiError('HTTP_' + upstream.status, upstream.body.slice(0, 300), upstream.status); continue; }
+      if (upstream.body.trimStart().startsWith('{')) {
+        let j; try { j = JSON.parse(upstream.body); } catch {}
+        if (j && j.code !== 0) {
+          lastError = new ApiError(j.code, j.msg, 200);
+          if (isAuthError(lastError)) { pool.penalize(token, 300_000); await relogin(token); }
+          continue;
+        }
+      }
+      const extractor = makeExtractor();
+      extractor.push(upstream.body);
+      extractor.flush();
+      if (!extractor.text && !extractor.reasoning) {
+        limiter.cooldown(token);
+        lastError = new ApiError('EMPTY_ANSWER', 'upstream returned an empty answer (DeepSeek rate limit); retry in ~30s', 429);
+        continue;
+      }
+      pool.reward(token); limiter.reward(token);
+
+      let calls = toolsActive ? extractToolCalls(extractor.text, allowedNames) : null;
+      if (calls) {
+        const forced = forcedTool(toolChoice);
+        if (forced) { const only = calls.filter((c) => c.name === forced); if (only.length) calls = only; }
+        if (!parallel) calls = calls.slice(0, 1);
+      }
+      const oaiResp = {
+        id: 'chatcmpl-' + crypto.randomUUID().replace(/-/g, ''),
+        object: 'chat.completion',
+        created: Math.floor(Date.now() / 1000),
+        model,
+        choices: [{ index: 0, message: calls ? { role: 'assistant', content: null, tool_calls: toToolCalls(calls) } : { role: 'assistant', content: extractor.text, ...(extractor.reasoning ? { reasoning_content: extractor.reasoning } : {}) }, finish_reason: calls ? 'tool_calls' : 'stop' }],
+        usage: { prompt_tokens: 0, completion_tokens: extractor.usage || 0, total_tokens: extractor.usage || 0 },
+      };
+      return sendAnthropic(res, 200, compat.openAIToAnthropicResponse(oaiResp, reqModel));
+    } catch (e) {
+      lastError = e;
+      if (res.headersSent) { try { res.end(); } catch {} return; }
+      if (isAuthError(e)) { pool.penalize(token, 300_000); await relogin(token); }
+      else if (e instanceof ApiError && (e.code === 40301 || /INVALID_POW/.test(String(e.msg)))) { warmer.dropChallenges(token); }
+      else pool.penalize(token, 1_200);
+    }
+  }
+  const status = lastError && lastError.httpStatus ? lastError.httpStatus : 502;
+  return anthropicErr(res, status, lastError ? lastError.message : 'upstream failure', 'api_error');
+}
+
+function sendVertex(res, status, obj) {
+  const body = JSON.stringify(obj);
+  res.writeHead(status, withSecurityHeaders({
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': Buffer.byteLength(body),
+    'Cache-Control': 'no-store',
+    'Access-Control-Allow-Origin': '*',
+  }));
+  res.end(body);
+}
+
+function vertexErr(res, status, message) {
+  sendVertex(res, status, { error: { code: status, message, status: status >= 500 ? 'INTERNAL' : 'INVALID_ARGUMENT' } });
+}
+
+async function handleVertexGenerate(req, res, modelFromPath, stream) {
+  pool.reloadIfChanged();
+  if (suspendedUntil > Date.now() && !pool.pick()) return vertexErr(res, 503, `DeepSeek account suspended until ${new Date(suspendedUntil).toISOString()}`);
+
+  let raw;
+  try { raw = await readBody(req); } catch (e) {
+    const msg = String(e && e.message || e);
+    if (/payload too large/i.test(msg)) return vertexErr(res, 413, 'payload too large');
+    return vertexErr(res, 400, 'invalid JSON body');
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return vertexErr(res, 400, 'request body must be a JSON object');
+
+  const oai = compat.vertexToOpenAI(raw, modelFromPath);
+  const model = oai.model || DEFAULT_MODEL;
+  const thinking = /reason/i.test(model);
+
+  const defs = toolDefs(Array.isArray(oai.tools) ? oai.tools : []);
+  const toolsActive = defs.length > 0;
+  const allowedNames = new Set(defs.map((d) => d.name));
+
+  let prompt;
+  try {
+    const transcript = buildTranscript(oai.messages, contentToText);
+    prompt = toolsActive ? `System: ${buildToolInstructions(oai.tools, 'auto')}\n\n${transcript}` : transcript;
+  } catch (e) { return vertexErr(res, 400, e.message); }
+
+  const MAX_ATTEMPTS = 4;
+  const MAX_WAIT_MS = 2_000;
+  const MAX_RATE_WAIT_MS = Number(process.env.RATE_MAX_WAIT_MS || 35_000);
+  let lastError = null;
+
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    let token = pool.pick();
+    if (!token) {
+      if (suspendedUntil > Date.now()) return vertexErr(res, 503, `DeepSeek account suspended until ${new Date(suspendedUntil).toISOString()}`);
+      const wait = pool.nextAvailableMs();
+      if (!Number.isFinite(wait) || wait > MAX_WAIT_MS) return vertexErr(res, 503, 'no DeepSeek token available');
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      token = pool.pick();
+      if (!token) return vertexErr(res, 503, 'no DeepSeek token available');
+    }
+    let rateBlocked = false;
+    for (;;) {
+      const wait = limiter.waitMs(token);
+      if (wait <= 0) { limiter.take(token); break; }
+      if (wait > MAX_RATE_WAIT_MS) { lastError = new ApiError('RATE_LIMITED', 'DeepSeek rate limit; retry shortly', 429); rateBlocked = true; break; }
+      await new Promise((r) => setTimeout(r, wait));
+    }
+    if (rateBlocked) break;
+
+    try {
+      const [sessionId, challenge] = await Promise.all([warmer.session(token), warmer.challenge(token)]);
+      if (stream && !res.headersSent) {
+        const extractor = makeExtractor();
+        const timing = {};
+        let started = false;
+        let jsonBody = '';
+        const sg = new StreamGate({ toolsActive, holdBack: HOLD_BACK });
+        const writeChunk = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+        const handleEvents = (events) => {
+          for (const ev of events) {
+            if (ev.kind === 'reasoning' || sg.buffering) continue;
+            const piece = sg.pump(extractor.text);
+            if (piece) {
+              if (!started) {
+                started = true;
+                res.writeHead(200, withSecurityHeaders({ 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', 'Connection': 'keep-alive', 'Access-Control-Allow-Origin': '*', }));
+              }
+              writeChunk({ candidates: [{ content: { role: 'model', parts: [{ text: piece }] }, index: 0 }] });
+            }
+          }
+        };
+        const onStream = (chunkText) => { handleEvents(extractor.push(chunkText)); };
+        const onJson = (chunkText) => { jsonBody += chunkText; };
+        const splitter = createSseSplitter(onStream, onJson);
+        const release = await limiter.lock(token);
+        let upstream;
+        try { upstream = await complete(token, { sessionId, challenge, prompt, thinking, onData: splitter, timing }); } finally { release(); }
+
+        if (!started && !extractor.text && !extractor.reasoning) {
+          let j = null; try { j = JSON.parse(jsonBody); } catch {}
+          if (j) { lastError = new ApiError(j.code, j.msg, upstream.status); if (isAuthError(lastError)) { pool.penalize(token, 300_000); await relogin(token); } continue; }
+          if (upstream.status !== 200) { lastError = new ApiError('HTTP_' + upstream.status, (jsonBody || 'empty upstream').slice(0, 300), upstream.status); continue; }
+          limiter.cooldown(token);
+          lastError = new ApiError('EMPTY_ANSWER', 'upstream returned an empty answer (DeepSeek rate limit); retry in ~30s', 429);
+          continue;
+        }
+
+        pool.reward(token); limiter.reward(token);
+        handleEvents(extractor.flush());
+        if (!started) {
+          started = true;
+          res.writeHead(200, withSecurityHeaders({ 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', 'Connection': 'keep-alive', 'Access-Control-Allow-Origin': '*', }));
+        }
+        let calls = null;
+        if (toolsActive && sg.buffering) calls = extractToolCalls(extractor.text, allowedNames);
+        if (calls) {
+          if (!false) calls = calls.slice(0, calls.length); // keep as-is
+          const parts = calls.map((c) => ({ functionCall: { name: c.name, args: c.arguments || {} } }));
+          writeChunk({ candidates: [{ content: { role: 'model', parts }, finishReason: 'STOP', index: 0 }] });
+        } else {
+          const rest = sg.buffering ? sg.drain(extractor.text) : sg.finish(extractor.text);
+          if (rest) writeChunk({ candidates: [{ content: { role: 'model', parts: [{ text: rest }] }, index: 0 }] });
+          if (extractor.reasoning) writeChunk({ candidates: [{ content: { role: 'model', parts: [{ text: extractor.reasoning }] }, index: 0 }] });
+          writeChunk({ candidates: [{ content: { role: 'model', parts: [] }, finishReason: 'STOP', index: 0 }], usageMetadata: { promptTokenCount: 0, candidatesTokenCount: extractor.usage || 0, totalTokenCount: extractor.usage || 0 } });
+        }
+        return res.end();
+      }
+
+      // non-stream
+      const release = await limiter.lock(token);
+      let upstream;
+      try { upstream = await complete(token, { sessionId, challenge, prompt, thinking }); } finally { release(); }
+      if (upstream.status !== 200) { lastError = new ApiError('HTTP_' + upstream.status, upstream.body.slice(0, 300), upstream.status); continue; }
+      if (upstream.body.trimStart().startsWith('{')) {
+        let j; try { j = JSON.parse(upstream.body); } catch {}
+        if (j && j.code !== 0) { lastError = new ApiError(j.code, j.msg, 200); if (isAuthError(lastError)) { pool.penalize(token, 300_000); await relogin(token); } continue; }
+      }
+      const extractor = makeExtractor();
+      extractor.push(upstream.body);
+      extractor.flush();
+      if (!extractor.text && !extractor.reasoning) {
+        limiter.cooldown(token);
+        lastError = new ApiError('EMPTY_ANSWER', 'upstream returned an empty answer (DeepSeek rate limit); retry in ~30s', 429);
+        continue;
+      }
+      pool.reward(token); limiter.reward(token);
+      let calls = toolsActive ? extractToolCalls(extractor.text, allowedNames) : null;
+      if (calls) calls = calls.slice(0, calls.length);
+      const oaiResp = {
+        id: 'chatcmpl-' + crypto.randomUUID().replace(/-/g, ''),
+        object: 'chat.completion',
+        created: Math.floor(Date.now() / 1000),
+        model,
+        choices: [{ index: 0, message: calls ? { role: 'assistant', content: null, tool_calls: toToolCalls(calls) } : { role: 'assistant', content: extractor.text, ...(extractor.reasoning ? { reasoning_content: extractor.reasoning } : {}) }, finish_reason: calls ? 'tool_calls' : 'stop' }],
+        usage: { prompt_tokens: 0, completion_tokens: extractor.usage || 0, total_tokens: extractor.usage || 0 },
+      };
+      return sendVertex(res, 200, compat.openAIToVertexResponse(oaiResp, modelFromPath || model));
+    } catch (e) {
+      lastError = e;
+      if (res.headersSent) { try { res.end(); } catch {} return; }
+      if (isAuthError(e)) { pool.penalize(token, 300_000); await relogin(token); }
+      else if (e instanceof ApiError && (e.code === 40301 || /INVALID_POW/.test(String(e.msg)))) { warmer.dropChallenges(token); }
+      else pool.penalize(token, 1_200);
+    }
+  }
+  const status = lastError && lastError.httpStatus ? lastError.httpStatus : 502;
+  return vertexErr(res, status, lastError ? lastError.message : 'upstream failure');
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
 
@@ -799,6 +1218,9 @@ const server = http.createServer(async (req, res) => {
           metrics: '/metrics',
           models: '/v1/models',
           chat: '/v1/chat/completions',
+          anthropic_messages: '/v1/messages',
+          vertex_generate: '/v1beta/models/{model}:generateContent',
+          vertex_stream: '/v1beta/models/{model}:streamGenerateContent',
         },
         docs: 'https://github.com/zeroaiproject/Free-DeepSeek-API',
       };
@@ -859,6 +1281,21 @@ const server = http.createServer(async (req, res) => {
 
     if ((url.pathname === '/v1/chat/completions' || url.pathname === '/chat/completions') && method === 'POST') {
       return await handleChat(req, res);
+    }
+
+    // Anthropic Messages API compatibility
+    if ((url.pathname === '/v1/messages' || url.pathname === '/messages') && method === 'POST') {
+      return await handleAnthropicMessages(req, res);
+    }
+
+    // Google Vertex / Gemini API compatibility
+    // Matches: /v1beta/models/{model}:generateContent, /v1/models/{model}:generateContent,
+    // /v1/projects/.../locations/.../publishers/google/models/{model}:generateContent (and stream variants)
+    const vertexMatch = url.pathname.match(/\/models\/([^/:]+):(generateContent|streamGenerateContent)$/);
+    if (vertexMatch && method === 'POST') {
+      const modelFromPath = decodeURIComponent(vertexMatch[1] || '');
+      const stream = vertexMatch[2] === 'streamGenerateContent' || url.searchParams.get('alt') === 'sse';
+      return await handleVertexGenerate(req, res, modelFromPath, stream);
     }
 
     if (method !== 'GET' && method !== 'POST' && method !== 'HEAD') {
