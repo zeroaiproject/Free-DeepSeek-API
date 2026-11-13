@@ -33,9 +33,12 @@ const pool = TokenPool.load();
 const warmer = new Warmer();
 const metrics = new Metrics();
 const limiter = new RateLimiter({
-  burst: Number(process.env.RATE_BURST || 6),
-  refillMs: Number(process.env.RATE_REFILL_MS || 5000),
-  cooldownMs: Number(process.env.RATE_COOLDOWN_MS || 30_000),
+  burst: Number(process.env.RATE_BURST || 4),
+  refillMs: Number(process.env.RATE_REFILL_MS || 6000),
+  cooldownMs: Number(process.env.RATE_COOLDOWN_MS || 45_000),
+  cooldownMaxMs: Number(process.env.RATE_COOLDOWN_MAX_MS || 5 * 60_000),
+  jitterMs: Number(process.env.RATE_JITTER_MS || 500),
+  minGapMs: Number(process.env.RATE_MIN_GAP_MS || 1500),
 });
 
 // Optional automatic re-login: DeepSeek revokes tokens, and a revoked token
@@ -104,7 +107,8 @@ function relogin(deadToken) {
 const watchdog = new Watchdog({
   pool,
   relogin,
-  intervalMs: Number(process.env.WATCHDOG_MS || 90_000),
+  intervalMs: Number(process.env.WATCHDOG_MS || 120_000),
+  jitterMs: Number(process.env.WATCHDOG_JITTER_MS || 20_000),
 });
 
 const MODELS = [
@@ -561,6 +565,7 @@ async function handleChat(req, res) {
         }
 
         pool.reward(token);
+        limiter.reward(token);
         handleEvents(extractor.flush());
 
         let finish = 'stop';
@@ -656,6 +661,7 @@ async function handleChat(req, res) {
       }
 
       pool.reward(token);
+      limiter.reward(token);
 
       let calls = toolsActive ? extractToolCalls(extractor.text, allowedNames) : null;
       if (calls && !parallel) calls = calls.slice(0, 1);

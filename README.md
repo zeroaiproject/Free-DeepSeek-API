@@ -156,11 +156,17 @@ All variables are optional and read from the environment. A local **`.env` is au
 | `WARM_POOL` | `3` | Pre-fetched PoW challenges per token (`0` disables) |
 | `WARM_SESSION_USES` | `4` | Reuse a chat session N times before rotating |
 | `WARM_SESSION_POOL` | `1` | Pre-created sessions kept per token |
-| `RATE_BURST` | `6` | Back-to-back upstream completions allowed per token |
-| `RATE_REFILL_MS` | `5000` | One new slot per token every N ms |
-| `RATE_COOLDOWN_MS` | `30000` | Pause after an empty answer (silent throttle) |
+| `WARM_REFILL_DELAY_MS` | `750` | Base delay between background warm refills (anti-burst) |
+| `WARM_REFILL_JITTER_MS` | `600` | Jitter added to warm refills |
+| `RATE_BURST` | `4` | Short burst allowance per token (lower = steadier/human-like) |
+| `RATE_REFILL_MS` | `6000` | One new slot per token every N ms |
+| `RATE_COOLDOWN_MS` | `45000` | Base pause after an empty answer (silent throttle) |
+| `RATE_COOLDOWN_MAX_MS` | `300000` | Cap for escalated cooldown on repeated throttles |
+| `RATE_JITTER_MS` | `500` | Random jitter added to waits/cooldowns (breaks fixed cadence) |
+| `RATE_MIN_GAP_MS` | `1500` | Minimum gap between completions per token |
 | `RATE_MAX_WAIT_MS` | `35000` | Max wait for a slot before erroring |
-| `WATCHDOG_MS` | `90000` | Liveness probe interval (`0` disables) |
+| `WATCHDOG_MS` | `120000` | Liveness probe interval (`0` disables) |
+| `WATCHDOG_JITTER_MS` | `20000` | Jitter on probe schedule (avoids periodic pings) |
 | `STREAM_HOLD_BACK` | `32` | Chars held back while scanning for a tool call |
 | `DEEPSEEK_PROXY` | — | Upstream via `http://[user:pass@]host:port` (CONNECT tunnel) |
 | `DEEPSEEK_EMAIL` / `DEEPSEEK_PASSWORD` | — | Enable automatic re-login on `40003` |
@@ -390,7 +396,7 @@ node scripts/bench.js 3 long
 </details>
 
 > [!WARNING]
-> Keep volume low and human-like. Nothing here prevents a policy suspension; the proxy can only reduce obvious automation signals and recover from plain token revocation.
+> **No anti-suspension is foolproof.** Account suspension is a server-side policy decision. The proxy reduces obvious automation signals (conservative pacing, jittered waits/cooldowns, minimum gaps, escalating backoff on throttles, staggered warm refills/watchdog probes, one in-flight completion per token, session reuse) and recovers from plain token revocation — but it cannot guarantee an account won’t be suspended. Keep volume low and human-like, prefer residential egress, and avoid sustained automated loops.
 
 ---
 
